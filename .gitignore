@@ -1,0 +1,6 @@
+.env
+__pycache__
+*.npy
+*.npy
+/ITBA-TP/data/modelos/bertopic_model_app
+/ITBA-TP/test/bigramas.txt
