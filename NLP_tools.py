@@ -2,6 +2,7 @@ import re
 import unicodedata
 from functools import wraps
 import numpy as np
+from itertools import islice
 
 from sklearn.metrics.pairwise import cosine_similarity
 from opensearch_data_model import TopicKeyword
@@ -18,7 +19,7 @@ class Cleaning_text:
         # Definir los caracteres Unicode no deseados
         self.unicode_pattern    = ['\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u202f']
         self.urls_pattern       = re.compile(r'http\S+')
-        self.simbols_chars      = r"""#&'"`´“()[]*+,-.;:/<=>¿?!¡@\^_{|}~©√≠"""                 # Lista de símbolos a eliminar
+        self.simbols_chars      = r"""#&’'"`´“”()[]*+,-.;:/<=>¿?!¡@\^_{|}~©√≠"""                 # Lista de símbolos a eliminar
         self.simbols_pattern    = re.compile(f"[{re.escape(self.simbols_chars)}]")    
         self.escape_pattern     = ['\n', '\t', '\r']
         
@@ -201,9 +202,12 @@ def topic_documents(topic, topic_model, probs, df_news, data):
         # Ordeno de mayor a menor
         ids_filter_sort = dict(sorted(filter.items(), key=lambda item: item[1], reverse=True))
 
-        title_filter_sort = [ df_news.loc[df_news['indice'] == idx].values[0][1] for idx in ids_filter_sort.keys() ]
+        # Extraer los primeros 5 elementos
+        first_10_elements = dict(islice(ids_filter_sort.items(), 10))
 
-        return ids_filter_sort, title_filter_sort, threshold
+        title_filter_sort = [ df_news.loc[df_news['indice'] == idx].values[0][1] for idx in first_10_elements.keys() ]
+
+        return first_10_elements, title_filter_sort, threshold
     except:
         return {}, {}, 0.0
     
