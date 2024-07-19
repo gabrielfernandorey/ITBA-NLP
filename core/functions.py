@@ -1,8 +1,8 @@
-import json, os, re
+import os, re
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
-from collections import Counter
+from collections import Counter, defaultdict
 
 from datetime import datetime
 from dateutil.parser import parse
@@ -12,6 +12,8 @@ from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 from st_aggrid.shared import JsCode
 #----------------------------------------------------------------------------------
 from opensearch_data_model import Topic, TopicKeyword, News, os_client, TOPIC_INDEX_NAME, NEWS_INDEX_NAME
+from opensearch_io import save_news, get_news, update_news
+
 #----------------------------------------------------------------------------------
 from NLP_tools import Cleaning_text, top_keywords, top_entities, topic_documents, get_topic_name, best_document, clean_all, keywords_with_neighboards
 #----------------------------------------------------------------------------------
@@ -29,274 +31,10 @@ from openai import OpenAI
 
 
 #----------------------------------------------------------------------------------
-def init_opensearch():
-    
-    if 'show_message' not in st.session_state:
-        st.session_state.show_message = True
-        # código de inicialización
-        if not os_client.indices.exists(index=TOPIC_INDEX_NAME):
-            Topic.init()
-            index_name = 'topic'
-            body = {"settings": {"index.mapping.total_fields.limit": 2000 }}
-            os_client.indices.put_settings(index=index_name, body=body)
-            print("Índice Topic creado")
-        else:
-            print("El índice Topic ya existe. Saltando inicialización de base de datos.")
-        
-        if not os_client.indices.exists(index=NEWS_INDEX_NAME):
-            News.init()
-            print("Índice News creado")
-        else:
-            print("El índice News ya existe. Saltando inicialización de base de datos.")
-        
-    return 
-
-#----------------------------------------------------------------------------------
-def data_ingestion():     
-    
-    st.title("Ingesta de noticias")
-    load_dotenv()
-    PATH=os.environ.get('PATH_LOCAL')
-
-    # Carga de archivo -------------------------------------------------
-    uploaded_file = st.file_uploader(
-                        "Upload a news file Parquet",
-                        type=["parquet"],
-                        help="You must download the news file",
-    )
-
-    if not uploaded_file:
-
-        # Crear un cuadro de entrada de texto
-        input_text = st.text_area("Or enter only one news text", height=200)
-
-        if st.button("Process News Text"):
-            
-            process_text(PATH, input_text)
-
-        else:
-
-            st.stop()
-    else:
-        uploaded_file.read()
-        st.success(f"File {uploaded_file.name} uploaded successfully")
-    
-        # Leer el archivo Parquet
-        df = pd.read_parquet(uploaded_file)
-    
-        # Mostrar el DataFrame
-        st.write("Vista previa del archivo Parquet:")
-        st.write(df)
-        
-        # Mostrar total de registro
-        st.write("Registros: ", len(df))
-
-        # Boton para procesar el archivo
-        if st.button("Process file"):
-
-            process_file(df, PATH)
-            
-    return
-        
-#----------------------------------------------------------------------------------
-def process_file(df, PATH):
-
-    data = list(df['in__text'])
-
-    # Cargar el modelo de spaCy para español
-    spa = spacy.load("es_core_news_lg")
-
-    # Stopwords
-    SPANISH_STOPWORDS = list(pd.read_csv(PATH+'spanish_stop_words.csv' )['stopwords'].values)
-    SPANISH_STOPWORDS_SPECIAL = list(pd.read_csv(PATH+'spanish_stop_words_spec.csv' )['stopwords'].values)
-    
-    # Crear un espacio para la barra de progreso
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    st.write("Procesando entidades y keywords")    
-
-    # Detectar entidades para todos los documentos usando spaCy
-    entities = []
-    original_entities = []
-    keywords_spa = []
-    for i, data_in in enumerate(data):
-
-        # Actualizar la barra de progreso
-        progress = (i + 1) / len(data)
-        progress_bar.progress(progress)
-        status_text.text(f'Procesando documento {i+1} de {len(data)}')
-
-        # Contabilizar palabras en doc
-        normalized_text = re.sub(r'\W+', ' ', data_in.lower())
-        words_txt_without_stopwords = [word for word in normalized_text.split() if word not in SPANISH_STOPWORDS+SPANISH_STOPWORDS_SPECIAL]
-        words_txt_counter = Counter(words_txt_without_stopwords)
-        words_counter = {elemento: cuenta for elemento, cuenta in sorted(words_txt_counter.items(), key=lambda item:item[1], reverse=True) }
-
-        # Extraer entidades del doc segun atributos
-        extract = spa(data_in)
-        entidades_spacy = [(ent.text, ent.label_) for ent in extract.ents]
-        ent_select = [ent for ent in entidades_spacy if ent[1] == 'PER' or ent[1] == 'ORG' or ent[1] == 'LOC' ]
-
-        # Extraer keywords del doc
-        keywords_spa.append([(ext.text, ext.pos_) for ext in extract]) 
-
-        # Extraer entidades maximo 3 palabras 
-        entidades = [ent[0] for ent in ent_select if len(ent[0].split()) <= 3]
-        ent_clean = clean_all(entidades, accents=False)
-        ent_unique = list(set([ word for word in ent_clean if word not in SPANISH_STOPWORDS+SPANISH_STOPWORDS_SPECIAL] ))
-
-        ents_proc = {}
-        
-        pre_original_entities = []
-        for ent in ent_unique:
-            
-            # Criterio de selección 
-            weight = 0
-            for word in ent.split():
-                if word in words_counter:
-                    weight += 1 /len(ent.split()) * words_counter[word]
-            
-            ents_proc[ent] = round(weight,4)
-
-        ents_proc = {k: v for k, v in sorted(ents_proc.items(), key=lambda item: item[1], reverse=True) if v > 0}
-
-        # Crear la lista de entidades procesadas por noticia 
-        pre_entities = [key for key, _ in ents_proc.items()] 
-
-        # Obtener las última palabra de cada entidad que tenga mas de una palabra por entidad
-        ult_palabras = list(set([ent.split()[-1] for ent in pre_entities if len(ent.split()) > 1 ]))
-
-        # Eliminar palabra única si la encuentra al final de una compuesta
-        pre_entities_aux = []
-        for idx, ent in enumerate(pre_entities):
-            if not (len(ent.split()) == 1 and ent in ult_palabras):
-                pre_entities_aux.append(ent)
-
-        # Obtener las palabras únicas
-        unicas_palabras = [ ent.split()[0] for ent in pre_entities_aux if len(ent.split()) > 1 ]
-
-        # Eliminar palabra única si la encuentra al comienzo de una compuesta
-        pre_entities = []
-        for idx, ent in enumerate(pre_entities_aux):
-            if not (len(ent.split()) == 1 and ent in unicas_palabras):
-                pre_entities.append(ent)
-
-        # obtener entidades filtradas
-        if len(pre_entities) > 10:
-            umbral = 10 + (len(pre_entities)-10) // 2
-            entities = pre_entities[:umbral] 
-        else:
-            entities = pre_entities[:10]
-
-        # capturar las entidades en formato original
-        for ent in entities:
-            pre_original_entities.append([elemento for elemento in entidades if elemento.lower() == ent.lower()])
-
-        sort_original_entities = sorted(pre_original_entities, key=len, reverse=True)
-        
-        try:
-            original_entities.append( [ent[0] for ent in sort_original_entities if ent] ) 
-        except Exception as e:
-            original_entities.append([])
-
-    
-    # Procesamiento de keywords encontradas como 'MISC'
-    keywords = []
-    original_keywords = []
-    word_count = {}
-    for i, item in enumerate(keywords_spa):
-        for ent in item:
-            if ent[1] == 'MISC':
-                words = str(ent[0]).lower()
-                words = clean_all([words], accents=False)[0]
-                if len(entities[i]) < 5: # Si se encontraron menos de 5 entidades, obtenemos keywords.
-                    if len(words) > 2 and len(words.split()) < 2:
-                        add = True
-                        for token in words.split():
-                            if token.isalpha():
-                                if token in SPANISH_STOPWORDS or token in SPANISH_STOPWORDS_SPECIAL:
-                                    add = False
-                            elif token.isnumeric():
-                                if len(token) > 5:
-                                    add = False
-                            else:
-                                if token in SPANISH_STOPWORDS_SPECIAL:
-                                    add = False
-
-                            if add:
-                                if words not in word_count:
-                                    word_count[words] = {'count': 0, 'original': ent[0]}
-                                else:
-                                    word_count[words]['count'] += 1   
-
-        # Ordenar el diccionario por el valor del conteo en orden descendente      
-        sorted_word_count = dict(sorted(word_count.items(), key=lambda item: item[1]['count'], reverse=True))  
-        
-        word_count = {}
-
-        # Crear la lista de entidades procesadas por noticia (para guardar en DB)
-        original_keywords.append([value['original'] for _, value in sorted_word_count.items()]) # and value['count'] > 1] )
-                                    
-        # Crear la lista de entidades procesadas por noticia (entrenamiento)
-        pre_keywords = [key for key, _ in sorted_word_count.items()]   # and _['count'] > 1]
-                            
-        # entidades para entrenar (seleccionamos hasta 5 primeras)
-        keywords.append( pre_keywords[:5] )
-
-
-    k_w_n, common = keywords_with_neighboards(keywords_spa)    
-    
-    # filtramos que al menos se repitan una vez
-    filtered_k_w_n = [ [tupla[0] for tupla in sublista if tupla[1] > 1] for sublista in k_w_n ]
-    
-    # filtramos hasta 5 keywords
-    filtered_common = [ [tupla[0] for i, tupla in enumerate(sublista) if i < 6] for sublista in common ]
-    
-    # Unificar Keywords + Keywords with neighboards
-    keywords_plus = [ list(set(keywords[i]+filtered_k_w_n[i]+filtered_common[i])) for i in range(len(keywords)) ] 
-
-
-    # Grabar noticias en la base
-    st.write("Actualizando noticias en OpenSearch...")
-
-    index_name = 'news'
-    bulk_data = []
-
-    for idx, text_news in enumerate(data):
-        doc = {
-            'index': {
-                '_index': index_name,
-                '_id': int(df.index[idx])
-            }
-        }
-        reg = {
-            'title': str(df.iloc[idx].in__title),
-            'news' : str(text_news), 
-            'author': str(df.iloc[idx]['Author Name']),
-            'entities' : original_entities[idx],
-            'keywords' : keywords_plus[idx],
-            'created_at': datetime.now().isoformat(),
-            'process': False
-        }
-        bulk_data.append(json.dumps(doc))
-        bulk_data.append(json.dumps(reg))
-
-    # Convertir la lista en un solo string separado por saltos de línea
-    bulk_request_body = '\n'.join(bulk_data) + '\n'
-
-    # Enviar la solicitud bulk
-    response = os_client.bulk(body=bulk_request_body)
-
-    if response['errors']:
-        st.write("Errores encontrados al insertar los documentos")
-    else:
-        st.write("Actualizado.")
-
-    return
-
-#----------------------------------------------------------------------------------
 def process_text(PATH, input_text):
-
+    """
+    Función para estimar el topico de una noticia ingresada manualmente como texto
+    """
     try:
         topic_model = BERTopic.load(PATH+"modelos/bertopic_model_app")
 
@@ -318,7 +56,7 @@ def process_text(PATH, input_text):
     
         st.write(f" Topico: {response['hits']['hits'][0]['_source']['index']} - {response['hits']['hits'][0]['_source']['name']}")
 
-        estim = round(response['hits']['hits'][0]['_source']['similarity_threshold'],4)
+        estim = round(response['hits']['hits'][0]['_score'],4)
         if estim >= 0.8:
             color = "#80EE19"
             font_size=20
@@ -333,8 +71,189 @@ def process_text(PATH, input_text):
             st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
 
     except:
-    
         st.warning("Error al estimar el Tópico")
+
+    return
+#----------------------------------------------------------------------------------
+def data_ingestion():     
+    """
+    Ingesta de noticias - Proceso por lote o estima un topico de una noticia ingresada manualmente
+    """
+    st.title("Ingesta de noticias")
+    load_dotenv()
+    PATH=os.environ.get('PATH_LOCAL')
+
+    # Carga de archivo 
+    uploaded_file = st.file_uploader(
+                        "Cargar un nuevo archivo Parquet",
+                        type=["parquet"],
+                        help="Debe cargar un archivo de noticias compatible",
+    )
+
+    if not uploaded_file:
+
+        # Crear un cuadro de entrada de texto
+        input_text = st.text_area("O ingrese una noticia para estimar un tópico", height=200)
+
+        if st.button("Procesar noticia"):
+            
+            process_text(PATH, input_text) # Estimar topico de noticia ingresada como texto
+
+        else:
+            st.stop()
+    else:
+        uploaded_file.read()
+        st.success(f"File {uploaded_file.name} uploaded successfully")
+    
+        # Leer el archivo Parquet
+        df = pd.read_parquet(uploaded_file)
+    
+        # Mostrar el DataFrame
+        st.write("Vista previa del archivo Parquet:")
+        st.write(df)
+        
+        # Mostrar total de registros
+        st.write("Registros: ", len(df))
+
+        # Boton para procesar el archivo
+        if st.button("Process file"):
+
+            process_file(df, PATH) # Procesar lote de noticias
+            
+    return
+        
+#----------------------------------------------------------------------------------
+def process_file(df, PATH):
+    """
+    Proceso de lote de noticias 
+    """
+        
+    data = list(df['in__text'])
+    
+    # Cargar el modelo de spaCy para español
+    spa = spacy.load("es_core_news_lg")
+
+    # Stopwords
+    SPANISH_STOPWORDS = list(pd.read_csv(PATH+'spanish_stop_words.csv' )['stopwords'].values)
+    SPANISH_STOPWORDS_SPECIAL = list(pd.read_csv(PATH+'spanish_stop_words_spec.csv' )['stopwords'].values)
+    
+    # Crear un espacio para la barra de progreso
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    st.write("Procesando entidades y keywords...")    
+
+    # Detectar ENTIDADES para todos los documentos usando spaCy
+    entities = []
+    keywords_spa = []
+    for i, data_in in enumerate(data):
+
+        # Actualizar la barra de progreso
+        progress = (i + 1) / len(data)
+        progress_bar.progress(progress)
+        status_text.text(f'Procesando documento {i+1} de {len(data)}')
+
+        # Contabilizar palabras en doc original
+        normalized_text = re.sub(r'\W+', ' ', data_in.lower())
+        words_txt_without_stopwords = [word for word in normalized_text.split() if word not in SPANISH_STOPWORDS+SPANISH_STOPWORDS_SPECIAL]
+        words_txt_counter = Counter(words_txt_without_stopwords)
+        words_counter = {elemento: cuenta for elemento, cuenta in sorted(words_txt_counter.items(), key=lambda item:item[1], reverse=True) if cuenta > 1}
+
+        # Extraer entidades del doc segun atributos
+        extract = spa(data_in)
+        entidades_spacy = [(ent.text, ent.label_) for ent in extract.ents]
+        ent_select = [ent for ent in entidades_spacy if ent[1] == 'PER' or ent[1] == 'ORG' or ent[1] == 'LOC' ]
+
+        # Extraer keywords del doc
+        keywords_spa.append([(ext.text, ext.pos_) for ext in extract]) 
+
+        # Extraer entidades de "maximo 3 palabras"
+        ent_max_3 = [ent[0] for ent in ent_select if len(ent[0].split()) <= 3]
+        ent_clean = clean_all(ent_max_3, accents=False)
+        ent_unique = list(set([ word for word in ent_clean if word not in SPANISH_STOPWORDS+SPANISH_STOPWORDS_SPECIAL] ))
+
+        ents_proc = {}
+        for ent in ent_unique:
+            
+            # Criterio de selección 
+            weight = 0
+            for word in ent.split():
+                if word in words_counter:
+                    weight += 1 /len(ent.split()) * words_counter[word]
+            
+            ents_proc[ent] = round(weight,4)
+
+        ents_proc_sorted = {k: v for k, v in sorted(ents_proc.items(), key=lambda item: item[1], reverse=True) if v > 0}
+
+        # Crear la lista preliminar de entidades procesadas por noticia 
+        pre_entities = [key for key, _ in ents_proc_sorted.items()] 
+
+        # Obtener las últimas palabras de cada entidad que tenga mas de una palabra por entidad
+        last_words = list(set([ent.split()[-1] for ent in pre_entities if len(ent.split()) > 1 ]))
+
+        # Eliminar palabra única si la encuentra al final de una compuesta
+        pre_entities_without_last_word_equal = []
+        for idx, ent in enumerate(pre_entities):
+            if not (len(ent.split()) == 1 and ent in last_words):
+                pre_entities_without_last_word_equal.append(ent)
+
+        # Obtener las palabras únicas
+        unique_words = [ ent.split()[0] for ent in pre_entities_without_last_word_equal if len(ent.split()) > 1 ]
+
+        # Eliminar palabra única si la encuentra al comienzo de una compuesta
+        pre_entities_without_first_word_equal = []
+        for idx, ent in enumerate(pre_entities_without_last_word_equal):
+            if not (len(ent.split()) == 1 and ent in unique_words):
+                pre_entities_without_first_word_equal.append(ent)
+
+        # obtener entidades filtradas
+        if len(pre_entities_without_first_word_equal) > 10:
+            umbral = 10 + (len(pre_entities_without_first_word_equal)-10) // 2
+            filter_entities = pre_entities_without_first_word_equal[:umbral] 
+        else:
+            filter_entities = pre_entities_without_first_word_equal[:10]
+
+        pre_original_entities = []
+        # capturar las entidades en formato original
+        for ent in filter_entities:
+            pre_original_entities.append([elemento for elemento in ent_max_3 if elemento.lower() == ent.lower()])
+
+        sort_original_entities = sorted(pre_original_entities, key=len, reverse=True)
+        
+        try:
+            entities.append( [ent[0] for ent in sort_original_entities if ent] ) 
+        except Exception as e:
+            entities.append([])
+
+    
+    # Detectar KEYWORDS with neighboards y keywords mas frecuentes
+    k_w_n, keyword_single = keywords_with_neighboards(keywords_spa)
+    
+    # filtramos las que al menos se repiten una vez
+    filtered_k_w_n = [ [tupla[0] for tupla in sublista if tupla[1] > 1] for sublista in k_w_n ]
+    
+    # Si un keyword unigrama coincide en los bigramas elegidos se descarta.
+    # la cantidad de keywords se obtiene utilizando la media como umbral de corte
+    
+    values = [value for sublist in keyword_single for _, value in sublist]
+    threshold = np.mean(values) # Umbral
+
+    for i, sublist in enumerate(keyword_single):
+        lista_k_w_n = list(set([word for sentence in filtered_k_w_n[i] for word in sentence.split()]))
+        for tupla in sublist:
+            if tupla[1] >= threshold and tupla[0] not in lista_k_w_n:
+                filtered_k_w_n[i].append(tupla[0])
+
+    keywords = filtered_k_w_n 
+
+    # Grabar noticias en la base
+    st.write("Actualizando noticias en OpenSearch...")
+
+    response = save_news(data, df, entities, keywords)  
+
+    if response['errors']:
+        st.write("Errores encontrados al insertar los documentos")
+    else:
+        st.write("Actualizado.")
 
     return
 #----------------------------------------------------------------------------------
@@ -363,11 +282,12 @@ def view_news():
             entities = [""]
 
         created_at  = doc.to_dict()['created_at'] 
+        process     = doc.to_dict()['process'] 
 
-        db_news.append([index, title, style_tags(keywords), style_tags(entities), author, created_at])
+        db_news.append([index, title, style_tags(keywords), style_tags(entities), author, created_at, process])
 
     # Convertir a DataFrame
-    df = pd.DataFrame(db_news, columns=["indice", "titulo", "keywords", "entidades", "autor", "creado" ])
+    df = pd.DataFrame(db_news, columns=["indice", "titulo", "keywords", "entidades", "autor", "creado", "procesado" ])
     
 
     # Mostrar el DataFrame como una grilla en Streamlit
@@ -381,8 +301,9 @@ def view_news():
     gb.configure_column('titulo', width=400) 
     gb.configure_column('keywords', width=200) 
     gb.configure_column('entidades', width=200) 
-    gb.configure_column('autor', width=50)   
-    gb.configure_column('creado', width=50) 
+    gb.configure_column('autor', width=100)   
+    gb.configure_column('creado', width=100) 
+    gb.configure_column('procesado', width=100) 
     gb.configure_pagination(paginationAutoPageSize=True)
     gb.configure_selection('single')
     grid_options = gb.build()
@@ -422,38 +343,40 @@ def view_news():
 
             try:
                 topic_model = BERTopic.load(PATH+"modelos/bertopic_model_app")
-
                 new_doc_embedding = topic_model.embedding_model.embed(response['_source']['news'])
 
-                query = {
-                    "size": 5,
+                # Buscamos en la base a que topico pertenece el nuevo documento
+                knn_query = {
+                    "size": 1,
                     "query": {
                         "knn": {
                             "vector": {
-                                "vector": list(new_doc_embedding),
-                                "k" : 1000
+                                "vector": new_doc_embedding,
+                                "k" : 3
                             }
                         }
                     }
                 }
-                response = os_client.search(index='topic', body=query)
-    
-                st.write(f" Topico: {response['hits']['hits'][0]['_source']['index']} - {response['hits']['hits'][0]['_source']['name']}")
+                response = os_client.search(index='topic', body=knn_query)
 
-                estim = round(response['hits']['hits'][0]['_source']['similarity_threshold'],4)
-                if estim >= 0.8:
-                    color = "#80EE19"
-                    font_size=20
-                    st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
-                elif estim >= 0.5 and estim < 0.8:
-                    color = "#EEA719"
-                    font_size=16
-                    st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
+                if response['hits']['total']['value'] > 0:
+                    st.write(f" Topico: {response['hits']['hits'][0]['_source']['index']} - {response['hits']['hits'][0]['_source']['name']}")
+
+                    estim = round(response['hits']['hits'][0]['_score'],4)
+                    if estim >= 0.8:
+                        color = "#80EE19"
+                        font_size=20
+                        st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
+                    elif estim >= 0.5 and estim < 0.8:
+                        color = "#EEA719"
+                        font_size=16
+                        st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
+                    else:
+                        color = "#FF5733"
+                        font_size=14
+                        st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
                 else:
-                    color = "#FF5733"
-                    font_size=14
-                    st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
-
+                    st.warning("No se puede estimar el Tópico")
             except:
                 st.warning("Error al estimar el Tópico")
         
@@ -463,92 +386,59 @@ def view_news():
     return
 
 #----------------------------------------------------------------------------------
-def news_no_process():
-    """
-    Obtener noticias de la base no procesadas, aquellos marcados en process == False
-    """
-
-    index_name = 'news'
-    search_query = {
-        'query': {
-            'match': {
-                'process': False  
-            }
-        },
-        'size': 10000
-    }
-    # Realizar la búsqueda
-    response = os_client.search( body=search_query, index=index_name )
-
-    db_news = []
-    for reg in response['hits']['hits']:
-        _id =  reg['_id']
-        title =  reg['_source']['title']
-        news =  reg['_source']['news']
-        try:
-            keywords =  reg['_source']['keywords'] 
-        except:
-            keywords = ['']
-        try:
-            entities =  reg['_source']['entities'] 
-        except:
-            entities = ['']
-        created_at =  reg['_source']['created_at'] 
-        
-        db_news.append([_id, title, news, keywords, entities, created_at])
-
-    return db_news
-
-#----------------------------------------------------------------------------------
-def news_process():
-    """
-    Marcar los registros de noticias procesados 
-    """
-    # Marcar registros de noticias procesados
-    index_name = 'news'
-    search_query = {
-        'query': {
-            'match': {
-                'process': False  
-            }
-        },
-        'size': 10000
-    }
-
-    # Realizar la búsqueda
-    response = os_client.search( body=search_query, index=index_name )
-
-    for i, reg in enumerate(response['hits']['hits']):
-        doc_id = reg['_id']
-        
-        update_body = {
-                        "doc": {                              
-                            "process": True
-                        }
-        }
-
-        # Realizar la actualización
-        os_client.update(index=index_name, id=doc_id, body=update_body)
-    return
-#----------------------------------------------------------------------------------
 def topic_process(openai_api_key):
+    """
+    Proceso para la generación de tópicos
+    """
+    db_news = get_news()
+
+    # Crear un diccionario para agrupar los registros por fecha (solo día, mes y año)
+    fechas_dict = defaultdict(list)
+
+    # Agrupar registros por fecha
+    for registro in db_news:
+        fecha_completa = registro[-1]
+        fecha_solo_dia = fecha_completa.split('T')[0]  # Tomar solo el día, mes y año
+        if fecha_solo_dia not in fechas_dict:
+            fechas_dict[fecha_solo_dia] = 1
+        else:
+            fechas_dict[fecha_solo_dia] += 1
+
+
+    # Convertir el diccionario en un DataFrame
+    df = pd.DataFrame(list(fechas_dict.items()), columns=['Fecha', 'Cantidad de noticias'])
+
+    st.subheader(" Elegir lote/s de noticias a procesar")
+    # Mostrar el DataFrame en una grilla seleccionable
+    st.dataframe(df)
+
+    # Crear una lista de opciones basadas en el DataFrame
+    options = df.index.tolist()
+    selected_indices = st.multiselect('Seleccione las filas', options, format_func=lambda x: df.loc[x, 'Fecha'])
+
+    # Filtrar el DataFrame basado en la selección
+    if selected_indices:
+        selected_rows = df.loc[selected_indices]
+        
+    else:
+        st.write('No se han seleccionado filas.')
+
+    load_dotenv()
+    PATH=os.environ.get('PATH_LOCAL')
 
     # Boton para procesar el archivo
     if st.button("Iniciar Proceso"):
-
-        load_dotenv()
-        PATH=os.environ.get('PATH_LOCAL')
-
+       
         client = OpenAI(api_key= openai_api_key)
 
-        # Busqueda de todas las noticias no procesadas de la base ( en False ) (al menos 10.000)
-        db_news = news_no_process()
+        # Busqueda de todas las noticias de la base
+        db_news = get_news()
 
         if db_news == []:
             st.write('<span style="color: yellow;">Sin nuevos datos a procesar...</span>', unsafe_allow_html=True)
             return
         
-        df_news = pd.DataFrame(db_news , columns=["indice", "titulo", "noticia", "keywords", "entidades", "creado"])
+        df_news = pd.DataFrame(db_news , columns=["indice", "titulo", "noticia", "keywords", "entidades"])
 
         id_data    = list(df_news['indice'])
         title_data = list(df_news['titulo'])
@@ -560,8 +450,7 @@ def topic_process(openai_api_key):
     
         # Vocabulario - Unificar Entities + Keywords
         vocab = list(set().union(*entities, *keywords))
-            
-
+           
         st.write("Datos preprocesados...")
 
         # Modelo
@@ -590,14 +479,15 @@ def topic_process(openai_api_key):
 
         # All steps together
         topic_model = BERTopic(
-            embedding_model=embedding_model,            # Step 1 - Extract embeddings
-            umap_model=umap_model,                      # Step 2 - Reduce dimensionality
-            hdbscan_model=hdbscan_model,                # Step 3 - Cluster reduced embeddings
-            vectorizer_model=vectorizer_model,          # Step 4 - Tokenize topics
-            ctfidf_model=ctfidf_model,                  # Step 5 - Extract topic words
-            # representation_model=representation_model,  # Step 6 - (Optional) Fine-tune topic represenations
-            language='multilingual',
-            # calculate_probabilities=True
+            embedding_model=embedding_model,                # Step 1 - Extract embeddings
+            umap_model=umap_model,                          # Step 2 - Reduce dimensionality
+            hdbscan_model=hdbscan_model,                    # Step 3 - Cluster reduced embeddings
+            vectorizer_model=vectorizer_model,              # Step 4 - Tokenize topics
+            ctfidf_model=ctfidf_model,                      # Step 5 - Extract topic words
+            # representation_model=representation_model,    # Step 6 - (Optional) Fine-tune topic represenations
+            # language='multilingual',                      # This is not used if embedding_model is used.
+            # calculate_probabilities=True,                 
+            verbose=True,
         )
 
         st.write("Entrenando...")
@@ -618,10 +508,20 @@ def topic_process(openai_api_key):
         np.save(PATH+"modelos/topic_embeddings_app.npy", docs_embedding)
         st.write("Embeddings guardados.")
 
+
+        # Crear un espacio para la barra de progreso
         st.write("Actualizando tópicos encontrados...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
 
         # Grabar todos los topicos en la base
-        for topic in topic_model.get_topics().keys():
+        for i, topic in enumerate(topic_model.get_topics().keys()):
+
+            # Actualizar la barra de progreso
+            progress = (i+1) / len(set(topics))
+            progress_bar.progress(progress)
+            status_text.text(f'Procesando topico {i} de {len(set(topics))-1}')
             
             if topic > -1:
 
@@ -636,38 +536,34 @@ def topic_process(openai_api_key):
                     vector = list(topic_model.topic_embeddings_[topic + 1 ]), 
                     similarity_threshold = threshold,                      
                     created_at = datetime.now(),
-                    to_date = parse('2024-04-02'),
-                    from_date = parse('2024-04-01'),         
+                    from_date = parse('2024-04-01'),
+                    to_date = parse('2024-04-02'),         
                     keywords = topic_keywords_top,
                     entities = topic_entities_top,
                     id_best_doc = id_best_doc,
                     title_best_doc = title_best_doc,
                     best_doc = best_doc,
-                    docs = topic_documents_ids
                 ) 
-
-                topic_doc.save()
                 
+                # Grabar topico
+                topic_doc.save()
 
-
-        st.write("Actualizando base de noticias...")      
-
-        # Marcar registros de noticias como procesados
-        # news_process()
+        st.write("Actualizando base de noticias...")           
+        # Marcar registros de noticias como procesados y grabar sus embeddings
+        # update_news([ int(ID) for ID in topic_documents_ids.keys() ], docs_embedding)
 
         st.write("Proceso finalizado.")
 
     return
-
-
 #----------------------------------------------------------------------------------
 def view_all_topics():
     
     try:
         load_dotenv()
         PATH=os.environ.get('PATH_LOCAL')
-        topic_model = BERTopic.load(PATH+"modelos/bertopic_model_app")
-        
+        topics = np.load(PATH+"modelos/topics_app.npy")
+        probs = np.load(PATH+"modelos/probs_app.npy")
+
         db_topics = []
         data_topics = {}
         for doc in Topic.search().query().scan():
@@ -679,7 +575,7 @@ def view_all_topics():
             to_date = doc.to_dict()['to_date']
             id_best_doc = doc.to_dict()['id_best_doc']
             title_best_doc = doc.to_dict()['title_best_doc']
-            best_doc = doc.to_dict()['best_doc']
+            
 
             db_topics.append([index, name, round(similarity_threshold, 4), create_at, from_date, to_date, title_best_doc, id_best_doc])
             data_topics[index] = [doc.to_dict()['name'],
@@ -687,15 +583,14 @@ def view_all_topics():
                                   doc.to_dict()['best_doc'],
                                   doc.to_dict()['entities'],
                                   doc.to_dict()['keywords'],
-                                  doc.to_dict()['docs']
+                                  doc.to_dict()['similarity_threshold']
                                   ]
 
         # Convertir a DataFrame
         df = pd.DataFrame(db_topics, columns=["indice", "nombre", "umbral", "creado", "desde", "hasta", "titulo noticia mas cercana", "id noticia"])
         
-
         # Mostrar el DataFrame como una grilla en Streamlit
-        st.title("Tópicos de noticias en la base")
+        st.title("Tópicos de noticias")
 
         # Configurar opciones de la grilla
         gb = GridOptionsBuilder.from_dataframe(df)
@@ -730,28 +625,26 @@ def view_all_topics():
 
             st.subheader(f":orange[otras noticias relacionadas al tópico] : {data_topics[idx[0]][0]}")
 
-            # Crear una consulta de múltiples IDs
-            others_docs = []          
-            index_name = 'news'
-            mget_query = {
-                "docs": [{"_index": index_name, "_id": doc_id} for doc_id in data_topics[idx[0]][5]]
-            }
-            
-            # Realizar la búsqueda de múltiples IDs
-            response = os_client.mget(body=mget_query, index=index_name)
-            
-            # Procesar la respuesta
-            for i, doc in enumerate(response['docs']):
-                if doc['found']:
-                    id = doc['_id']
-                    title = doc['_source']['title']
-                    probs = round(data_topics[idx[0]][5][str(id)],4)
-                    others_docs.append([id, title, probs])
+            # Obtener noticias de la base
+            db_news = get_news()
+
+            # Obtener los idx de las noticias del topico
+            topic_docs_idx = [i for i, topic in enumerate(topics) if topic == idx]
+
+            # Preparar datos de otros documentos
+            others_docs = []
+            for i in topic_docs_idx:
+                others_docs.append([db_news[i][0], db_news[i][1], round(probs[i],4)] )
             
             df_other_docs = pd.DataFrame(others_docs, columns=['indice', 'titulo', 'probs']) 
 
+            # Ordenar docs y filtrar por umbral del topico
+            df_other_docs_sorted = df_other_docs.sort_values('probs', ascending=False)
+            df_other_docs_filtered = df_other_docs_sorted[df_other_docs_sorted['probs'] > float(data_topics[idx[0]][5])]
+            
+
             # Configurar opciones de la grilla
-            gbo = GridOptionsBuilder.from_dataframe(df_other_docs)
+            gbo = GridOptionsBuilder.from_dataframe(df_other_docs_filtered)
 
             gbo.configure_pagination(paginationAutoPageSize=True)
             gbo.configure_column('indice', width=120) 
@@ -761,7 +654,7 @@ def view_all_topics():
 
             # Mostrar la grilla con AgGrid
             response_2 = AgGrid(
-                df_other_docs,
+                df_other_docs_filtered,
                 gridOptions=grid_options_o,
                 enable_enterprise_modules=True,
                 allow_unsafe_jscode=True,
@@ -794,18 +687,16 @@ def view_all_topics():
                                             index=index_name
                 )
                 st.text_area(f":orange[Texto de la noticia] | {response['hits']['hits'][0]['_source']['author']}" \
-                             f" | {response['hits']['hits'][0]['_source']['created_at'][:10]} ", response['hits']['hits'][0]['_source']['news'], height=1000)
+                             f" | {response['hits']['hits'][0]['_source']['created_at'][:10]} ", response['hits']['hits'][0]['_source']['news'], height=400)
                 
                 st.text_area(f":orange[Keywords de la noticia]", " | ".join([ent for ent in response['hits']['hits'][0]['_source']['keywords']]) ) 
-                st.text_area(f":orange[Entidades de la noticia]", " | ".join([ent for ent in response['hits']['hits'][0]['_source']['entities']]) )
+                st.text_area(f":orange[Entidades de la noticia]", " | ".join([ent for ent in response['hits']['hits'][0]['_source']['entities']]) ) 
         else:
             st.write("No hay filas seleccionadas.")
         
     except:
         st.write("Error en el proceso.")
     return
-        
-
 #----------------------------------------------------------------------------------
 def control():
 

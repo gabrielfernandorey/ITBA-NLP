@@ -202,12 +202,9 @@ def topic_documents(topic, topic_model, probs, df_news, data):
         # Ordeno de mayor a menor
         ids_filter_sort = dict(sorted(filter.items(), key=lambda item: item[1], reverse=True))
 
-        # Extraer los primeros 5 elementos
-        first_10_elements = dict(islice(ids_filter_sort.items(), 10))
+        title_filter_sort = [ df_news.loc[df_news['indice'] == idx].values[0][1] for idx in ids_filter_sort.keys() ]
 
-        title_filter_sort = [ df_news.loc[df_news['indice'] == idx].values[0][1] for idx in first_10_elements.keys() ]
-
-        return first_10_elements, title_filter_sort, threshold
+        return ids_filter_sort, title_filter_sort, threshold
     except:
         return {}, {}, 0.0
     
@@ -244,7 +241,7 @@ def get_topic_name(texto, client, model="gpt-3.5-turbo", solo_titulos=False):
         max_tokens=150,
         n=1,
         presence_penalty=0.6,
-        temperature=0.7,
+        temperature=0.5,
         top_p=1.0,
         stop=None
     )

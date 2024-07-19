@@ -1,4 +1,4 @@
-from opensearchpy import Float, OpenSearch, Field, Integer, Document, Keyword, Text, Boolean, DenseVector, Nested, Date, Object, connections, InnerDoc
+from opensearchpy import Float, OpenSearch, Field, Integer, Document, Keyword, Text, Boolean, DenseVector, Nested, Date, Object, connections, InnerDoc, helpers
 import os
 
 # local test
@@ -39,11 +39,10 @@ TOPIC_INDEX_PARAMS = {
 NEWS_INDEX_NAME = 'news'
 NEWS_INDEX_PARAMS = {
     'number_of_shards': 1,      # 1 fragmento (no hay replicas)
-    'knn': True                 # aplicamos knn para que la base utilice como algoritmo de clusterizacion
 }
 
 
-knn_params = {                  # parámetros de knn
+knn_params = {                      # parámetros de knn
     "name": "hnsw",
     "space_type": "cosinesimil",    # usamos similitud coseno
     "engine": "nmslib"              # tipo de algortimo que va a utilizar
@@ -98,7 +97,7 @@ class Topic(Document):
             }
 
     def save(self, ** kwargs):
-        self.meta.id = f'{self.index}' + self.name.replace(', ', '-').replace(' ', '_')
+        self.meta.id = f'{self.index}' + '_' + self.name.replace(' ', '_')
         return super(Topic, self).save(** kwargs)
     
 #-------------------------------------------------------------------------------------------------------------
@@ -106,6 +105,7 @@ class News(Document):
     title = Text()
     news = Text()
     author = Text()
+    vector = KNNVector(TOPIC_DIMENSIONS, knn_params)    # vector
     entities = Keyword()
     keyboards = Keyword()
     created_at = Date() 
@@ -121,5 +121,6 @@ class News(Document):
     def save(self, ** kwargs):
         self.meta.id = f'{self.index}'
         return super(News, self).save(** kwargs)
-    
+
+
     

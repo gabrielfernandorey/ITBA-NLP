@@ -2,12 +2,12 @@
 
 import streamlit as st
 from streamlit_option_menu import option_menu
-#--------------------------------------------
+
 from components.sidebar import sidebar
 from core.functions import *
-#--------------------------------------------
-import os
-#--------------------------------------------
+
+from opensearch_io import init_opensearch
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -22,7 +22,7 @@ st.set_page_config(page_title = 'Topicos de Noticias', # Nombre de la pagina, sa
 with st.sidebar:
     selected = option_menu(
         menu_title="Topicos de noticias",
-        options=["Ingesta", "Base de Noticias", "Detección de Tópicos", "Topicos", "Control"],
+        options=["Ingesta", "Base de Noticias", "Detección de Tópicos", "Topicos", "Gestión de Tópicos"],
     )
 
 sidebar()
@@ -62,7 +62,7 @@ if selected == "Topicos":
     view_all_topics()
 
 
-if selected == "Control":
+if selected == "Gestión de Tópicos":
 
     # Visualizar los topicos que existan en la base
     control()
