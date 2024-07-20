@@ -1,4 +1,5 @@
 from dateutil.parser import parse
+from datetime import datetime
 import json
 
 import streamlit as st
@@ -67,16 +68,76 @@ def save_news(data, df, entities, keywords) -> str:
 
     return response
 #----------------------------------------------------------------------------------
-def get_news() -> list:
+def update_news(documents_ids: list, docs_embedding) -> bool:
     """
-    Obtener las noticias de la base 
+    Marcar en True los registros de noticias procesadas y guardar el embedding correspondiente.
+    """
+
+    if len(documents_ids) != len(docs_embedding):
+        raise ValueError("El número de IDs de documentos y embeddings no coinciden.")
+        return False
+    
+    index_name = 'news'
+
+    # Construir el cuerpo de la solicitud para el API _bulk
+    acciones = []
+    for doc_id, embedding in zip(documents_ids, docs_embedding):
+        update_body = { 
+                        "doc": {
+                            "vector": embedding,  
+                            "process": True,
+                        }
+        }
+        accion = {
+            "_op_type": "update",
+            "_index": index_name,
+            "_id": doc_id,
+            "doc": update_body["doc"]
+        }
+        acciones.append(accion)
+
+    # Realizar la actualización por lotes
+    helpers.bulk(os_client, acciones)
+
+    return True
+#----------------------------------------------------------------------------------
+def get_news(date: str = None) -> list:
+    """
+    Obtener las noticias de la base que tengan el campo 'process' en False y, opcionalmente, filtradas por fecha.
+    Parámetros:
+    - date: Fecha en formato 'día-mes-año'
     """
     index_name = 'news'
     query = {
         "query": {
-            "match_all": {}  
+            "bool": {
+                "must": [
+                    {"match_all": {}}
+                ],
+                "filter": [
+                    {"term": {"process": False}}
+                ]
+            }
         }
     }
+
+    # Agregar filtro de fecha si se proporciona
+    if date:
+        try:
+            year, month, day  = map(int, date.split('-'))
+            date_filter = {
+                "range": {
+                    "created_at": {
+                        "gte": f"{year}-{month:02d}-{day:02d}T00:00:00",
+                        "lte": f"{year}-{month:02d}-{day:02d}T23:59:59"
+                    }
+                }
+            }
+            query["query"]["bool"]["filter"].append(date_filter)
+        except ValueError:
+            print(day, month, year)
+            raise ValueError("La fecha debe estar en el formato 'día-mes-año' ")
+
 
     # Inicializar la búsqueda con scroll
     scroll = '2m'  # Mantener el contexto de scroll por 2 minutos
@@ -118,29 +179,34 @@ def get_news() -> list:
 
     return db_news
 #----------------------------------------------------------------------------------
-def update_news(topic_documents_ids: list) -> bool:
+def get_topics_opensearch(date_filter=None) -> dict:
     """
-    Marcar en True los registros de noticias procesadas 
+    Devuelve 100 registros de topicos del indice topic
     """
-    index_name = 'news'
-    update_body = { "doc":
-                        { "vector": {} ,    #################
-                          "process": True,
-                        }
-                  }
+    index_name='topic'
+    if date_filter:
+        # Crear el rango de fecha para filtrar el mismo día completo
+        date_filter_gte = f"{date_filter}T00:00:00"
+        date_filter_lte = f"{date_filter}T23:59:59"
 
-    # Construir el cuerpo de la solicitud para el API _bulk
-    acciones = []
-    for doc_id in topic_documents_ids:
-        accion = {
-            "_op_type": "update",
-            "_index": index_name,
-            "_id": doc_id,
-            "doc": update_body["doc"]
+        query = {
+            "size": 100, 
+            "query": {
+                "bool": {
+                    "must": [
+                        {"range": {"to_date": {"gte": date_filter_gte, "lte": date_filter_lte}}}
+                    ]
+                }
+            }
         }
-        acciones.append(accion)
-
-    # Realizar la actualización por lotes
-    helpers.bulk(os_client, acciones)
-
-    return True
+    else:
+        query = {
+            "query": {
+                "match_all": {}
+            }
+        }
+    
+    response = os_client.search(index=index_name, body=query)
+    topics = [hit['_source'] for hit in response['hits']['hits']]
+    return topics
+#----------------------------------------------------------------------------------

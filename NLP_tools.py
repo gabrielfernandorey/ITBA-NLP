@@ -229,9 +229,9 @@ def get_topic_name(texto, client, model="gpt-3.5-turbo", solo_titulos=False):
     """
     Funcion que devuelve el nombre de un topico generado por LLM
     """
-    messages = [{"role": "system", "content": "Debes responder el topico del texto que ingrese el usuario," \
-                "el topico como maximo expresado en 5 palabras" \
-                " el formato de salida debe ser la descipcion del topico "},
+    messages = [{"role": "system", "content": "Debes responder el topico del texto ingresado por el usuario," \
+                "el topico debe estar expresado en lo posible como maximo en 5 palabras," \
+                "el formato de salida debe ser la descipcion del topico."},
                 {"role": "user", "content": texto}]
     
     response = client.chat.completions.create(

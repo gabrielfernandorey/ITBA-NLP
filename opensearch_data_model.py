@@ -39,6 +39,7 @@ TOPIC_INDEX_PARAMS = {
 NEWS_INDEX_NAME = 'news'
 NEWS_INDEX_PARAMS = {
     'number_of_shards': 1,      # 1 fragmento (no hay replicas)
+    'knn': True                 # aplicamos knn para que la base utilice como algoritmo de clusterizacion
 }
 
 
