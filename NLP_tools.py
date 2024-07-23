@@ -19,7 +19,7 @@ class Cleaning_text:
         # Definir los caracteres Unicode no deseados
         self.unicode_pattern    = ['\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u202f']
         self.urls_pattern       = re.compile(r'http\S+')
-        self.simbols_chars      = r"""#&’'"`´“”()[]*+,-.;:/<=>¿?!¡@\^_{|}~©√≠"""                 # Lista de símbolos a eliminar
+        self.simbols_chars      = r"""#&’'"`´“”″()[]*+,-.;:/<=>¿?!¡@\^_{|}~©√≠"""                 # Lista de símbolos a eliminar
         self.simbols_pattern    = re.compile(f"[{re.escape(self.simbols_chars)}]")    
         self.escape_pattern     = ['\n', '\t', '\r']
         
@@ -177,21 +177,18 @@ def topic_documents(topic, topic_model, probs, df_news, data):
     """
     try:
         # Cantidad de documentos por topico
-        T = topic_model.get_document_info(data)
-        docs_per_topics = T.groupby(["Topic"]).apply(lambda x: x.index).to_dict()
+        docs_per_topics = [i for i, x in enumerate(topic_model.topics_) if x == topic]
 
         # Obtener los IDs de los documentos y sus probabilidades 
         docs_IDs = {}
         doc_probs_x_topic = []
-        for doc_idx in docs_per_topics[topic]:
+        for doc_idx in docs_per_topics:
             
             docs_IDs[df_news.indice[doc_idx]] = probs[doc_idx]
             doc_probs_x_topic.append(probs[doc_idx])
         
         # Calcular la media, el desvío estándar
-        mean = np.mean(doc_probs_x_topic)
-        std_dev = np.std(doc_probs_x_topic)
-        threshold = mean - std_dev
+        threshold = np.mean(doc_probs_x_topic)
 
         # Filtra los docs que superan o igualan al valor del umbral calculado
         filter = {}

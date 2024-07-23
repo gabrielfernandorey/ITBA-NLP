@@ -57,6 +57,15 @@ class TopicEntities(InnerDoc):
     name = Keyword()
     score = Float()
 
+class DocsProbs(InnerDoc):
+    doc_ID = Keyword()
+    score = Float()
+
+class KNNVector(Field):
+    name = "knn_vector"
+    def __init__(self, dimension, method, **kwargs):
+        super(KNNVector, self).__init__(dimension=dimension, method=method, **kwargs)
+
 class SimilarTopics(Document):
     topic_id = Keyword()
     similar_to = Keyword()
@@ -64,16 +73,6 @@ class SimilarTopics(Document):
     common_keywwords = Keyword()
     keywords_not_in_similar = Keyword()
     keywords_not_in_topic = Keyword()
-
-class KNNVector(Field):
-    name = "knn_vector"
-    def __init__(self, dimension, method, **kwargs):
-        super(KNNVector, self).__init__(dimension=dimension, method=method, **kwargs)
-
-class DocsProbs(InnerDoc):
-    doc_ID = Keyword()
-    score = Float()
-
 
 class Topic(Document):
     index = Integer()                                   # nro topico
@@ -88,7 +87,6 @@ class Topic(Document):
     id_best_doc = Integer()                             # id del mejor documento
     title_best_doc = Text()                             # titulo del mejor documento
     best_doc = Text()                                   # texto del mejor documento
-    docs = Object(DocsProbs)                            # documentos del tópico y probs ( filtrado por similarity_threshold )
     
     class Index:
         name = TOPIC_INDEX_NAME
@@ -106,6 +104,7 @@ class News(Document):
     title = Text()
     news = Text()
     author = Text()
+    topics = Integer(multi=True)
     vector = KNNVector(TOPIC_DIMENSIONS, knn_params)    # vector
     entities = Keyword()
     keyboards = Keyword()

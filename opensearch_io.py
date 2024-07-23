@@ -68,7 +68,7 @@ def save_news(data, df, entities, keywords) -> str:
 
     return response
 #----------------------------------------------------------------------------------
-def update_news(documents_ids: list, docs_embedding) -> bool:
+def update_news(documents_ids: list, docs_embedding, topics: list) -> bool:
     """
     Marcar en True los registros de noticias procesadas y guardar el embedding correspondiente.
     """
@@ -81,13 +81,24 @@ def update_news(documents_ids: list, docs_embedding) -> bool:
 
     # Construir el cuerpo de la solicitud para el API _bulk
     acciones = []
-    for doc_id, embedding in zip(documents_ids, docs_embedding):
-        update_body = { 
-                        "doc": {
-                            "vector": embedding,  
-                            "process": True,
-                        }
-        }
+    for doc_id, embedding, topic in zip(documents_ids, docs_embedding, topics):
+        if topic != -1:
+            update_body = { 
+                            "doc": {
+                                "vector": embedding,
+                                "topics": topic,   
+                                "process": True,
+                            }
+            }
+        else:
+            update_body = { 
+                            "doc": {
+                                "vector": embedding,
+                                "topics": topic,   
+                                "process": False,
+                            }
+            }
+            
         accion = {
             "_op_type": "update",
             "_index": index_name,
@@ -210,3 +221,26 @@ def get_topics_opensearch(date_filter=None) -> dict:
     topics = [hit['_source'] for hit in response['hits']['hits']]
     return topics
 #----------------------------------------------------------------------------------
+def select_data_from_news(topic: int):
+    
+    query = {
+        "size": 1000,
+        "query": {
+            "bool": {
+                "must": [
+                    {   "term": {
+                            "topics": topic
+                        }
+                    }
+                ]
+            }
+        }
+    }
+                    
+    response = os_client.search(index='news', body=query)
+
+    ID    = [hit['_id'] for hit in response['hits']['hits']]
+    title = [hit['_source']['title'] for hit in response['hits']['hits']]
+    news  = [hit['_source']['news'] for hit in response['hits']['hits']]
+
+    return ID, title, news
