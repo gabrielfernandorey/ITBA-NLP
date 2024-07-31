@@ -104,7 +104,8 @@ class News(Document):
     title = Text()
     news = Text()
     author = Text()
-    topics = Integer(multi=True)
+    topic = Integer(multi=True)
+    prob = Float()
     vector = KNNVector(TOPIC_DIMENSIONS, knn_params)    # vector
     entities = Keyword()
     keyboards = Keyword()

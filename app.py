@@ -27,8 +27,14 @@ with st.sidebar:
 
 sidebar()
 
-# Validación de base de datos iniciada e indices creados
-init_opensearch()
+if 'show_message' not in st.session_state:
+        st.session_state.show_message = True
+
+        # Validación de base de datos iniciada e indices creados
+        init_opensearch()
+
+        # Eliminar modelos si no existen topicos en el indice
+        delete_model()
 
 # OpenAI API key --------------------------------------------------
 openai_api_key = st.session_state.get("OPENAI_API_KEY")

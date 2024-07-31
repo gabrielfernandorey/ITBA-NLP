@@ -2,7 +2,7 @@ import re
 import unicodedata
 from functools import wraps
 import numpy as np
-from itertools import islice
+import pandas as pd
 
 from sklearn.metrics.pairwise import cosine_similarity
 from opensearch_data_model import TopicKeyword
@@ -92,10 +92,18 @@ def clean_all(entities, accents=True, lower=True) -> list:
     return entities_clean
 
 
-#------------------------------------
-def top_keywords(topic, topic_model):
+#-----------------------------------------------------------------------
+def top_keywords(topic_id: int, topic_model: object, PATH) -> dict:
+    """
+    Funcion que devuelve un diccionario de tuplas con el nombre del keyword y su peso,
+    filtrado por un umbral de corte (media)
+    """
     try:
-        keywords = topic_model.topic_representations_[topic]
+        # Stopwords
+        SPANISH_STOPWORDS = list(pd.read_csv(PATH+'spanish_stop_words.csv' )['stopwords'].values)
+        SPANISH_STOPWORDS_SPECIAL = list(pd.read_csv(PATH+'spanish_stop_words_spec.csv' )['stopwords'].values)
+        
+        keywords = topic_model.topic_representations_[topic_id]
         topic_keywords = [TopicKeyword(name=keyword, score=score) for keyword, score in keywords if keyword != '']
         
         freq_k = []
@@ -105,7 +113,7 @@ def top_keywords(topic, topic_model):
 
         topics_keywords_top = {}
         for name_score in topic_keywords:
-            if name_score['score'] >= umbral_k:
+            if name_score['score'] >= umbral_k and name_score['name'] not in SPANISH_STOPWORDS+SPANISH_STOPWORDS_SPECIAL:
                 topics_keywords_top[name_score['name']] = name_score['score']
         
         return topics_keywords_top
@@ -113,28 +121,38 @@ def top_keywords(topic, topic_model):
         return {}
        
 #-------------------------------------------------------------------------
-def top_entities(topic, topic_model, docs_embedding, data, entities_clean, n_entities=5):
+def top_entities(topic_id: int, topic_model: object, topics: list, docs_embedding, data_news, entities: list, n_entities=10):
+    """
+    Las entidades mas representativas del topico se extraen de las entidades de las noticias mas similares al topico
+    filtradas por el umbral del tópico
+    topic_id        : id del topico
+    topic_model     : modelo de topicos
+    topics          : lista de los indices de posicion de los documentos del conjunto de documentos de entrenamiento
+    n_entities      : cant. de entidades extraidas por cada documento del topico
+    """
 
     try:
-        # Cantidad de documentos por topico
-        T = topic_model.get_document_info(data)
-        docs_per_topics = T.groupby(["Topic"]).apply(lambda x: x.index).to_dict()
+        # Obtener todos los documentos de un topico
+        topic_docs_idx = [i for i, (_, topic) in enumerate(zip(data_news, topics)) if topic == topic_id]
+        df_data = pd.DataFrame(np.array(topic_docs_idx).reshape(-1,1), columns=["idx"])
 
         # Similitud coseno entre el topico y los documentos del topico
         s_coseno = []
-        for i in docs_per_topics[topic]:
-            s_coseno.append(cosine_similarity([topic_model.topic_embeddings_[topic + 1]], [docs_embedding[i]])[0][0])
+        for i in topic_docs_idx:
+            s_coseno.append(cosine_similarity([topic_model.topic_embeddings_[topic_id + 1]], [docs_embedding[i]])[0][0])
 
-        # Indices
-        idx_coseno_sort = np.argsort(s_coseno)[::-1]
+        df_data['similitud'] = s_coseno
+        
+        # umbral
+        threshold = df_data['similitud'].mean()
 
         # Ordenado por mayor similitud
-        docs_per_topics_unsort = docs_per_topics[topic]
+        df_filtered = df_data[df_data["similitud"] > threshold].sort_values("similitud", ascending=False)
 
-        # Entidades de documentos ordenados por similitud del topico elelgido
+        # Entidades de documentos ordenados para el topico elelgido (cantidad por documento=n_entities)
         entities_topic = []
-        for doc in docs_per_topics_unsort[idx_coseno_sort]:
-            entities_topic.append(entities_clean[doc][:n_entities])
+        for doc in list(df_filtered["idx"]):
+            entities_topic.append(entities[doc][:n_entities])
 
         # Crear un diccionario para contar en cuántos documentos aparece cada palabra
         document_frequencies = defaultdict(int)
@@ -144,14 +162,13 @@ def top_entities(topic, topic_model, docs_embedding, data, entities_clean, n_ent
             unique_words = set(lista)
             for palabra in unique_words:
                 document_frequencies[palabra] += 1
-
+        
         # Ordenar las palabras por la frecuencia de documentos de mayor a menor
         sorted_frequencies = sorted(document_frequencies.items(), key=lambda item: item[1], reverse=True)
 
-        freq_e = []
-        for item in sorted_frequencies:
-            freq_e.append(item[1])
-        umbral_e = np.array(freq_e).mean()
+        # Calcular el umbral
+        freq_e = [item[1] for item in sorted_frequencies]
+        umbral_e = np.mean(freq_e)
 
         # Obtener el resultado ordenado de las primeras 10 entidades segun criterio de corte
         topic_entities_top = {}
@@ -162,11 +179,16 @@ def top_entities(topic, topic_model, docs_embedding, data, entities_clean, n_ent
                     topic_entities_top[sorted_frequencies[idx][0]] = sorted_frequencies[idx][1]
                 else:
                     break
-                c += 1
-        
+                c += 1 
+
+            elif len(topic_entities_top) <= 3:
+                topic_entities_top[sorted_frequencies[idx][0]] = sorted_frequencies[idx][1]
+
         return topic_entities_top
-    except:
-        return {}
+    
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return False   
     
 #-------------------------------------------------------------------------
 def topic_documents(topic, topic_model, probs, df_news, data):

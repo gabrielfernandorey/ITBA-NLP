@@ -13,23 +13,21 @@ def init_opensearch():
     """
     Inicializa los indices de la base Opensearch si no fueron creados
     """
-    if 'show_message' not in st.session_state:
-        st.session_state.show_message = True
-        # código de inicialización
-        if not os_client.indices.exists(index=TOPIC_INDEX_NAME):
-            Topic.init()
-            #index_name = 'topic'
-            #body = {"settings": {"index.mapping.total_fields.limit": 2000 }}
-            #os_client.indices.put_settings(index=index_name, body=body)
-            print("Indice Topic creado")
-        else:
-            print("El índice Topic ya existe. Saltando inicialización de base de datos.")
-        
-        if not os_client.indices.exists(index=NEWS_INDEX_NAME):
-            News.init()
-            print("Indice News creado")
-        else:
-            print("El índice News ya existe. Saltando inicialización de base de datos.")
+    # código de inicialización
+    if not os_client.indices.exists(index=TOPIC_INDEX_NAME):
+        Topic.init()
+        #index_name = 'topic'
+        #body = {"settings": {"index.mapping.total_fields.limit": 2000 }}
+        #os_client.indices.put_settings(index=index_name, body=body)
+        print("Indice Topic creado")
+    else:
+        print("El índice Topic ya existe. Saltando inicialización de base de datos.")
+    
+    if not os_client.indices.exists(index=NEWS_INDEX_NAME):
+        News.init()
+        print("Indice News creado")
+    else:
+        print("El índice News ya existe. Saltando inicialización de base de datos.")
         
     return 
 #----------------------------------------------------------------------------------
@@ -68,9 +66,9 @@ def save_news(data, df, entities, keywords) -> str:
 
     return response
 #----------------------------------------------------------------------------------
-def update_news(documents_ids: list, docs_embedding, topics: list) -> bool:
+def update_news(documents_ids: list, docs_embedding, topics: list, probs: list) -> bool:
     """
-    Marcar en True los registros de noticias procesadas y guardar el embedding correspondiente.
+    Guardar el embedding, topico y probabilidad correspondiente en indice news
     """
 
     if len(documents_ids) != len(docs_embedding):
@@ -81,34 +79,32 @@ def update_news(documents_ids: list, docs_embedding, topics: list) -> bool:
 
     # Construir el cuerpo de la solicitud para el API _bulk
     acciones = []
-    for doc_id, embedding, topic in zip(documents_ids, docs_embedding, topics):
-        if topic != -1:
-            update_body = { 
-                            "doc": {
-                                "vector": embedding,
-                                "topics": topic,   
-                                "process": True,
-                            }
-            }
-        else:
-            update_body = { 
-                            "doc": {
-                                "vector": embedding,
-                                "topics": topic,   
-                                "process": False,
-                            }
-            }
-            
+    for doc_id, embedding, topic, prob in zip(documents_ids, docs_embedding, topics, probs):
+    
+        update_body = { 
+                        "doc": {
+                            "vector": embedding,
+                            "topic": topic,   
+                            "prob": prob,
+                            "process": True,
+                        }
+        }   
         accion = {
             "_op_type": "update",
             "_index": index_name,
             "_id": doc_id,
             "doc": update_body["doc"]
         }
+        
         acciones.append(accion)
 
-    # Realizar la actualización por lotes
-    helpers.bulk(os_client, acciones)
+    try:
+        # Realizar la actualización por lotes
+        helpers.bulk(os_client, acciones)
+    
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        st.write("Error en el proceso.")
 
     return True
 #----------------------------------------------------------------------------------
@@ -192,36 +188,41 @@ def get_news(date: str = None) -> list:
 #----------------------------------------------------------------------------------
 def get_topics_opensearch(date_filter=None) -> dict:
     """
-    Devuelve 100 registros de topicos del indice topic
+    Devuelve 1000 registros de topicos del indice topic
     """
     index_name='topic'
-    if date_filter:
-        # Crear el rango de fecha para filtrar el mismo día completo
-        date_filter_gte = f"{date_filter}T00:00:00"
-        date_filter_lte = f"{date_filter}T23:59:59"
+    try:
+        if date_filter:
+            # Crear el rango de fecha para filtrar el mismo día completo
+            date_filter_gte = f"{date_filter}T00:00:00"
+            date_filter_lte = f"{date_filter}T23:59:59"
 
-        query = {
-            "size": 100, 
-            "query": {
-                "bool": {
-                    "must": [
-                        {"range": {"to_date": {"gte": date_filter_gte, "lte": date_filter_lte}}}
-                    ]
+            query = {
+                "size": 1000, 
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"range": {"to_date": {"gte": date_filter_gte, "lte": date_filter_lte}}}
+                        ]
+                    }
                 }
             }
-        }
-    else:
-        query = {
-            "query": {
-                "match_all": {}
+        else:
+            query = {
+                "query": {
+                    "match_all": {}
+                }
             }
-        }
+        
+        response = os_client.search(index=index_name, body=query)
+        topics = [hit['_source'] for hit in response['hits']['hits']]
+        return topics
     
-    response = os_client.search(index=index_name, body=query)
-    topics = [hit['_source'] for hit in response['hits']['hits']]
-    return topics
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return None
 #----------------------------------------------------------------------------------
-def select_data_from_news(topic: int):
+def select_data_from_news(topic: int) -> list:
     
     query = {
         "size": 1000,
@@ -229,7 +230,7 @@ def select_data_from_news(topic: int):
             "bool": {
                 "must": [
                     {   "term": {
-                            "topics": topic
+                            "topic": topic
                         }
                     }
                 ]
@@ -242,5 +243,47 @@ def select_data_from_news(topic: int):
     ID    = [hit['_id'] for hit in response['hits']['hits']]
     title = [hit['_source']['title'] for hit in response['hits']['hits']]
     news  = [hit['_source']['news'] for hit in response['hits']['hits']]
+    probs = [hit['_source']['prob'] for hit in response['hits']['hits']]
 
-    return ID, title, news
+    return ID, title, news, probs
+#----------------------------------------------------------------------------------
+def delete_index_opensearch(index_name: str) -> bool:
+
+    try:
+        # Consulta para eliminar todos los documentos
+        delete_query = {
+                        "query": {
+                        "match_all": {}
+                        }
+        }
+
+        # Ejecutar la operación de borrado por consulta
+        response = os_client.delete_by_query(index=index_name, body=delete_query)
+
+        return True
+
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return False
+
+#----------------------------------------------------------------------------------
+def get_topics_date() -> list:
+
+    try:
+        index_name='topic'
+        query = {   "size": 1000,
+                    "query": {
+                        "match_all": {}
+                    }
+        }
+
+        response = os_client.search(index=index_name, body=query)
+        from_date  = [ hit['_source']['from_date'] for hit in response['hits']['hits']] 
+        to_date    = [ hit['_source']['to_date'] for hit in response['hits']['hits']] 
+        return from_date, to_date
+    
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return [],[]
+
+    
