@@ -101,6 +101,8 @@ class Topic(Document):
     
 #-------------------------------------------------------------------------------------------------------------
 class News(Document):
+    pos_id = Integer()
+    asset_id = Integer()
     title = Text()
     news = Text()
     author = Text()

@@ -1,8 +1,9 @@
-import re
+import re, os
 import unicodedata
 from functools import wraps
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 from sklearn.metrics.pairwise import cosine_similarity
 from opensearch_data_model import TopicKeyword
@@ -191,7 +192,7 @@ def top_entities(topic_id: int, topic_model: object, topics: list, docs_embeddin
         return False   
     
 #-------------------------------------------------------------------------
-def topic_documents(topic, topic_model, probs, df_news, data):
+def topic_documents(topic, topic_model, probs, df_news):
     """
     función que devuelve los ids de los documentos top del tópico, 
     los titulos de los documentos top del tópico y
@@ -248,10 +249,13 @@ def get_topic_name(texto, client, model="gpt-3.5-turbo", solo_titulos=False):
     """
     Funcion que devuelve el nombre de un topico generado por LLM
     """
-    messages = [{"role": "system", "content": "Debes responder el topico del texto ingresado por el usuario," \
-                "el topico debe estar expresado en lo posible como maximo en 5 palabras," \
-                "el formato de salida debe ser la descipcion del topico."},
-                {"role": "user", "content": texto}]
+    load_dotenv()
+    model=os.environ.get('MODEL', model)
+    messages = [{"role": "system","content":
+                        """ Debes responder generando un topico del texto ingresado de tal forma que sea genérico y representativo,
+                            el topico debe estar rigurosamente expresado como maximo en 5 palabras, 
+                            el formato de salida debe ser la descipcion del topico."""},
+                {"role": "user", "content": texto}] 
     
     response = client.chat.completions.create(
         messages=messages,
@@ -260,7 +264,7 @@ def get_topic_name(texto, client, model="gpt-3.5-turbo", solo_titulos=False):
         max_tokens=150,
         n=1,
         presence_penalty=0.6,
-        temperature=0.5,
+        temperature=0.3,
         top_p=1.0,
         stop=None
     )

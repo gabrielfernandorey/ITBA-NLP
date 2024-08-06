@@ -42,13 +42,15 @@ def save_news(data, df, entities, keywords) -> str:
         doc = {
             'index': {
                 '_index': index_name,
-                '_id': int(df.index[idx])
+                '_id': int(df.iloc[idx]['asset_id']),
             }
         }
         reg = {
-            'title': str(df.iloc[idx].in__title),
+            'pos_id': -1,
+            'asset_id': int(df.iloc[idx]['asset_id']),
+            'title': str(df.iloc[idx]['title']),
             'news' : str(text_news), 
-            'author': str(df.iloc[idx]['Author Name']),
+            'author': str(df.iloc[idx]['media']),
             'vector': None,
             'keywords' : keywords[idx],
             'entities' : entities[idx],
@@ -66,7 +68,7 @@ def save_news(data, df, entities, keywords) -> str:
 
     return response
 #----------------------------------------------------------------------------------
-def update_news(documents_ids: list, docs_embedding, topics: list, probs: list) -> bool:
+def update_news(documents_ids: list, pos_id: list, docs_embedding, topics: list, probs: list) -> bool:
     """
     Guardar el embedding, topico y probabilidad correspondiente en indice news
     """
@@ -79,10 +81,11 @@ def update_news(documents_ids: list, docs_embedding, topics: list, probs: list) 
 
     # Construir el cuerpo de la solicitud para el API _bulk
     acciones = []
-    for doc_id, embedding, topic, prob in zip(documents_ids, docs_embedding, topics, probs):
+    for doc_id, pid, embedding, topic, prob in zip(documents_ids, pos_id, docs_embedding, topics, probs):
     
         update_body = { 
                         "doc": {
+                            "pos_id": pid,
                             "vector": embedding,
                             "topic": topic,   
                             "prob": prob,
@@ -108,7 +111,7 @@ def update_news(documents_ids: list, docs_embedding, topics: list, probs: list) 
 
     return True
 #----------------------------------------------------------------------------------
-def get_news(date: str = None) -> list:
+def get_news(date: str = None, process: bool = False) -> list:
     """
     Obtener las noticias de la base que tengan el campo 'process' en False y, opcionalmente, filtradas por fecha.
     Parámetros:
@@ -122,7 +125,7 @@ def get_news(date: str = None) -> list:
                     {"match_all": {}}
                 ],
                 "filter": [
-                    {"term": {"process": False}}
+                    {"term": {"process": process}}
                 ]
             }
         }
@@ -188,7 +191,7 @@ def get_news(date: str = None) -> list:
 #----------------------------------------------------------------------------------
 def get_topics_opensearch(date_filter=None) -> dict:
     """
-    Devuelve 1000 registros de topicos del indice topic
+    Devuelve 1000 registros de topicos del indice topic 
     """
     index_name='topic'
     try:
@@ -209,6 +212,7 @@ def get_topics_opensearch(date_filter=None) -> dict:
             }
         else:
             query = {
+                "size": 1000,
                 "query": {
                     "match_all": {}
                 }
@@ -238,15 +242,26 @@ def select_data_from_news(topic: int) -> list:
         }
     }
                     
-    response = os_client.search(index='news', body=query)
+    response = os_client.search(index='news', body=query, scroll='2m')
 
-    ID    = [hit['_id'] for hit in response['hits']['hits']]
-    title = [hit['_source']['title'] for hit in response['hits']['hits']]
-    news  = [hit['_source']['news'] for hit in response['hits']['hits']]
-    probs = [hit['_source']['prob'] for hit in response['hits']['hits']]
+    # Obtener el scroll ID
+    scroll_id = response['_scroll_id']
+    total_hits = response['hits']['total']['value']
+    all_hits = response['hits']['hits']
+
+    while len(response['hits']['hits']) > 0:
+        response = os_client.scroll(scroll_id=scroll_id, scroll='2m')
+        scroll_id = response['_scroll_id']
+        all_hits.extend(response['hits']['hits'])
+
+    ID    = [hit['_id'] for hit in all_hits]
+    title = [hit['_source']['title'] for hit in all_hits]
+    news  = [hit['_source']['news'] for hit in all_hits]
+    probs = [hit['_source']['prob'] for hit in all_hits]
 
     return ID, title, news, probs
-#----------------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------------
 def delete_index_opensearch(index_name: str) -> bool:
 
     try:

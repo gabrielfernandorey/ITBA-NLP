@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 from collections import Counter, defaultdict
+from typing import Union
 
 from datetime import datetime, timedelta
 from dateutil.parser import parse
@@ -56,7 +57,7 @@ def process_text(PATH, input_text):
             }
         }
         response = os_client.search(index='topic', body=query)
-    
+        
         st.write(f" Topico: {response['hits']['hits'][0]['_source']['index']} - {response['hits']['hits'][0]['_source']['name']}")
 
         estim = round(response['hits']['hits'][0]['_score'],4)
@@ -73,7 +74,10 @@ def process_text(PATH, input_text):
             font_size=14
             st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
 
-    except:
+    except Exception as e:
+        os.system('cls')
+        print(f"Ha ocurrido un error: {e}")
+        print(response)
         st.warning("Error al estimar el Tópico")
 
     return
@@ -99,7 +103,6 @@ def data_ingestion():
         input_text = st.text_area("O ingrese una noticia para estimar un tópico", height=200)
 
         if st.button("Estimar tópico"):
-            
             process_text(PATH, input_text) # Estimar topico de noticia ingresada como texto
 
         else:
@@ -110,18 +113,40 @@ def data_ingestion():
     
         # Leer el archivo Parquet
         df = pd.read_parquet(uploaded_file)
+
+        columns = [ 'asset_id', 'title', 'media', 'start_time_local', 'entities', 'keywords' ]
+
+        if not dataset_validation(df):
+            st.error("Validación de columnas fallida de dataset")
+            st.write(f"Columnas necesarias: {columns}")
+            st.write(f"Columnas detectadas: {df.columns.to_list()}")
+            return
     
         # Mostrar el DataFrame
         st.write("Vista previa del archivo Parquet:")
-        st.write(df)
         
+        
+        st.write(df[columns])
+
         # Mostrar total de registros
         st.write("Registros: ", len(df))
 
-        # Boton para procesar el archivo
-        if st.button("Process file"):
+        # Mostrar total de registros
+        batch_news=os.environ.get('BATCH_NEWS', 1000)
+        st.write(f"Se seleccionaran un maximo de {batch_news} noticias al azar.")
+        
 
-            process_file(df, PATH) # Procesar lote de noticias
+        # Boton para procesar el archivo
+        if st.button("Process file"): 
+
+            if len(df) > int(batch_news):
+                # Seleccionar 1000 filas aleatorias
+                df_out = df.sample(n=int(batch_news), random_state=42)
+            else:
+                df_out = df.copy()
+
+            process_file( df_out, PATH ) # Procesar lote de noticias
+
             
     return
         
@@ -129,9 +154,8 @@ def data_ingestion():
 def process_file(df, PATH):
     """
     Proceso de lote de noticias 
-    """
-        
-    data = list(df['in__text'])
+    """ 
+    data = list(df['text'])
     
     # Cargar el modelo de spaCy para español
     spa = spacy.load("es_core_news_lg")
@@ -290,7 +314,7 @@ def view_news():
         db_news.append([index, title, style_tags(keywords), style_tags(entities), author, created_at, process])
 
     # Convertir a DataFrame
-    df = pd.DataFrame(db_news, columns=["indice", "titulo", "keywords", "entidades", "autor", "fecha", "procesado" ])
+    df = pd.DataFrame(db_news, columns=["asset_id", "title", "keywords", "entities", "media", "start_time_local", "process" ])
     
 
     # Mostrar el DataFrame como una grilla en Streamlit
@@ -300,13 +324,13 @@ def view_news():
     gb = GridOptionsBuilder.from_dataframe(df)
 
     # Definir anchos de columna específicos
-    gb.configure_column('indice', width=70) 
-    gb.configure_column('titulo', width=400) 
+    gb.configure_column('asset_id', width=100) 
+    gb.configure_column('title', width=400) 
     gb.configure_column('keywords', width=200) 
-    gb.configure_column('entidades', width=200) 
-    gb.configure_column('autor', width=100)   
-    gb.configure_column('fecha', width=100) 
-    gb.configure_column('procesado', width=100) 
+    gb.configure_column('entities', width=200) 
+    gb.configure_column('media', width=100)   
+    gb.configure_column('start_time_local', width=100) 
+    gb.configure_column('process', width=100) 
     gb.configure_pagination(paginationAutoPageSize=True)
     gb.configure_selection('single')
     grid_options = gb.build()
@@ -328,7 +352,7 @@ def view_news():
 
     # Mostrar los datos de la fila seleccionada
     if len(selected_rows) > 0:
-        idx = selected_rows["indice"].values
+        idx = selected_rows["asset_id"].values
         
         index_name = 'news'
         document_id = int(idx)
@@ -348,7 +372,7 @@ def view_news():
                 topic_model = BERTopic.load(PATH+"modelos/bertopic_model_app")
                 new_doc_embedding = topic_model.embedding_model.embed(response['_source']['news'])
 
-                # Buscamos en la base a que topico pertenece el nuevo documento
+                # Buscamos en el indice topic a que topico pertenece el nuevo documento
                 knn_query = {
                     "size": 1,
                     "query": {
@@ -379,6 +403,7 @@ def view_news():
                         font_size=14
                         st.write(f"Score: <span style='color:{color};font-size:{font_size}px'>{estim}</span>", unsafe_allow_html=True)
                 else:
+                    print(response['hits']['total']['value'])
                     st.warning("No se puede estimar el Tópico")
             except:
                 st.warning("Error al estimar el Tópico")
@@ -395,6 +420,8 @@ def topic_process(openai_api_key):
     """
     load_dotenv()
     PATH=os.environ.get('PATH_LOCAL')
+
+    SPANISH_STOPWORDS_SPECIAL = list(pd.read_csv(PATH+'spanish_stop_words_spec.csv' )['stopwords'].values)
 
     client = OpenAI(api_key= openai_api_key)
 
@@ -418,18 +445,22 @@ def topic_process(openai_api_key):
 
     # Convertir el diccionario en un DataFrame
     df_lotes = pd.DataFrame(list(fechas_dict.items()), columns=['Fecha', 'Cantidad de noticias'])
+    df_lotes_sort = df_lotes.sort_values("Fecha", ascending=True).reset_index(drop=True)
 
-    
     # Mostrar el DataFrame en una grilla seleccionable
     st.subheader("Noticias a procesar")
-    st.dataframe(df_lotes)
-    st.write(f"Proximo lote de noticias a procesar: {next(iter(fechas_dict))}")    
+
+    # Eliminar si en el dia hay menos de 50 noticias
+    df_lotes_sort_drop = df_lotes_sort[df_lotes_sort['Cantidad de noticias'] > 50]
+    st.dataframe(df_lotes_sort_drop)
+    st.write(f"Proximo lote de noticias a procesar: {df_lotes_sort_drop.iloc[0]['Fecha']}")    
 
 
     # Boton para procesar el archivo
     if st.button("Iniciar Proceso"):        
 
-        db_news = get_news( next(iter(fechas_dict)) )
+        # Lote de datos sin procesar filtrado por una fecha
+        db_news = get_news( df_lotes_sort_drop.iloc[0]['Fecha'] )
 
         df_news = pd.DataFrame(db_news , columns=["indice", "titulo", "noticia", "keywords", "entidades", "creado"])
 
@@ -442,6 +473,18 @@ def topic_process(openai_api_key):
        
         # Vocabulario - Unificar Entities + Keywords
         vocab = list(set().union(*entities, *keywords))
+        
+        # Proceso minimo de limpieza
+        clean_data = Cleaning_text()
+
+        proc_data = []
+        for data_in in data:
+            aux = clean_data.unicode(data_in)
+            aux = clean_data.urls(aux)
+            aux = clean_data.simbols(aux)
+            aux = clean_data.escape_sequence(aux)
+            aux = " ".join([ word for word in aux.split() if word.lower() not in SPANISH_STOPWORDS_SPECIAL])
+            proc_data.append(aux)
            
         st.write("Datos recuperados de la base...")
 
@@ -482,30 +525,36 @@ def topic_process(openai_api_key):
             verbose=True,
         )
 
+        os.system("cls")
         st.write("Entrenando...")
 
         # Entrenamiento
-        topics, probs = topic_model.fit_transform(data)
-        st.write(f"Topicos encontrados: {len(set(topics))-1}")
+        topics, probs = topic_model.fit_transform(proc_data)
+        
+        # Topicos validos (quitamos el topico -1)
+        topics_to_save = list(topic_model.get_topics().keys())[1:]
+        st.write(f"Topicos encontrados: {len(topics_to_save)}")
 
-        #
-        from_date  = [ next(iter(fechas_dict)) for _ in range(len(topic_model.get_topics().keys())) ] 
-        to_date = [ datetime.strptime(next(iter(fechas_dict)), '%Y-%m-%d') + timedelta(days=1) for _ in range(len(from_date)-1) ]
+        # Rango de fechas desde/hasta para los topicos del nuevo modelo entrenado
+        from_date  = [ df_lotes_sort_drop.iloc[0]['Fecha'] for _ in range(len(topic_model.get_topics().keys())) ] 
+        to_date = [ datetime.strptime(df_lotes_sort_drop.iloc[0]['Fecha'], '%Y-%m-%d') + timedelta(days=1) for _ in range(len(from_date)-1) ]
 
-        topics_to_save = topic_model.get_topics().keys()
-
+        
         # Verificar si ya existe un modelo previo
         if os.path.isfile(PATH+"modelos/bertopic_model_app"):
-            
+
             st.write("Iniciando proceso de fusion de modelos")
             
             # cargar modelo anterior
             topic_model_last = BERTopic.load(PATH+"modelos/bertopic_model_app")
-            
             st.write(f"Topicos anteriores: {len(set(topic_model_last.get_topics().keys()))-1}")
             
             # respaldar modelo anterior
             topic_model_last.save(PATH+f"modelos/bertopic_model_app_old")
+
+            # cargar embeddings modelo anterior y guardarlo como old
+            docs_embedding_last = np.load(PATH+f"modelos/docs_embeddings_app.npy")
+            np.save(PATH+f"modelos/docs_embeddings_app_old.npy", docs_embedding_last)
 
             # Obtener las fechas desde/hasta de los topicos existentes de opensearch
             from_date, to_date = get_topics_date()
@@ -513,9 +562,25 @@ def topic_process(openai_api_key):
             # Combine all models into one
             topic_model = BERTopic.merge_models([topic_model_last, topic_model])
 
-            # Obtener los nuevos topicos
-            topics_to_save = topic_model.get_topics().keys()
-            st.write(f"Nueva cantidad de topicos: {len(set(topics_to_save))-1}")
+            # Armar set de datos para inferir (ya procesados y nuevos)
+            db_news_pro = get_news( process=True )
+            db_merged = db_news_pro + db_news
+            df_news = pd.DataFrame(db_merged , columns=["indice", "titulo", "noticia", "keywords", "entidades", "creado"])
+            
+            idx_data     = list(df_news.index)
+            id_data      = list(df_news['indice'])
+            title_data   = list(df_news['titulo'])
+            data         = list(df_news['noticia'])
+            keywords     = list(df_news['keywords'])
+            entities     = list(df_news['entidades'])
+
+            # Inferencia de los nuevos datos con el modelo merged
+            topics, probs = topic_model.transform(data)
+
+            # Topicos validos (quitamos el topico -1)
+            topics_to_save = list(topic_model.get_topics().keys())[1:]
+
+            st.write(f"Total con tópicos fusionados: {len(topics_to_save)}")
 
             # Visualizar fusion de modelos
             df_combined = merged_results(topic_model_last, topic_model)
@@ -524,19 +589,28 @@ def topic_process(openai_api_key):
             # actualizacion de fechas desde/hasta de los topicos
             from_date, to_date = update_topics_date(from_date, to_date, df_combined, fechas_dict)
 
-            # Eliminar topicos de la base ( para que guardar los del modelo fusionado)
-            delete_index_opensearch("topic")
+            # Obtener los nombres de los tópicos existentes
+            topics_name = get_topics_opensearch()
+            topics_name = [name['name'] for name in topics_name]
 
+            # Eliminar topicos de la base ( para guardar los del modelo fusionado)
+            if not delete_index_opensearch("topic"):
+                st.error("Error al eliminar en indice topic", icon="🔥")                       
+                return
+        
 
         topic_model.save(PATH+f"modelos/bertopic_model_app")
         st.write("Modelo guardado.")
 
         st.write("Generando embeddings...")
-        # Obtenemos embeddings de todos los documentos
-        docs_embedding = topic_model.embedding_model.embed(data)
+        # Obtenemos embeddings de los documentos
+        docs_embedding = topic_model.embedding_model.embed(data, verbose=True)
         np.save(PATH+f"modelos/docs_embeddings_app.npy", docs_embedding)
         st.write("Embeddings guardados.")
-        
+
+        st.write("Actualizando base de noticias...")           
+        # Marcar registros de noticias como procesados y grabar sus embeddings, topicos, etc 
+        update_news( id_data, idx_data, docs_embedding, topics, probs )       
 
         # Crear un espacio para la barra de progreso
         st.write("Actualizando tópicos encontrados...")
@@ -546,23 +620,29 @@ def topic_process(openai_api_key):
         # Grabar todos los topicos en la base
         for i, topic in enumerate(topics_to_save):
 
-            # Actualizar la barra de progreso
-            progress = (i+1) / len(set(topics))
+            # Actualizar la barra de progreso 
+            progress = (i+1) / len(topics_to_save)
+            
             progress_bar.progress(progress)
-            status_text.text(f'Procesando topico {i} de {len(set(topics))-1}')
+            status_text.text(f'Procesando {i+1} de {len(topics_to_save)}')
             
             if topic > -1:
                
                 topic_keywords_top  = top_keywords(topic, topic_model, PATH)
                 topic_entities_top  = top_entities(topic, topic_model, topics, docs_embedding, idx_data, entities)
-                topic_documents_ids, topic_documents_title, threshold  = topic_documents(topic, topic_model, probs, df_news, data)
+                topic_documents_ids, topic_documents_title, threshold  = topic_documents(topic, topic_model, probs, df_news)
+                try:
+                    t_name = topics_name[topic]
+                except:
+                    t_name = get_topic_name(' '.join(topic_documents_title), client)
+                
                 id_best_doc, title_best_doc, best_doc = best_document(topic, topic_model, docs_embedding, id_data, title_data, data)
 
-                if topic_entities_top:
+                if topic_entities_top: 
 
                     topic_doc = Topic(
                         index = topic,   
-                        name = get_topic_name(' '.join(topic_documents_title), client),
+                        name = t_name,
                         vector = list(topic_model.topic_embeddings_[topic + 1 ]), 
                         similarity_threshold = threshold,                      
                         created_at     = datetime.now(),
@@ -580,10 +660,6 @@ def topic_process(openai_api_key):
                 else:
                     st.error("Errores de procesamiento", icon="🔥")                       
                     return
-                
-        st.write("Actualizando base de noticias...")           
-        # Marcar registros de noticias como procesados y grabar sus embeddings, topicos 
-        update_news( id_data, docs_embedding, topics, probs )
 
         st.write("Proceso finalizado.")
 
@@ -637,7 +713,7 @@ def view_all_topics():
             # Convertir a DataFrame
             topics_df = pd.DataFrame(db_topics, columns=["indice", "nombre", "umbral", "creado", "desde", "hasta", "titulo noticia mas cercana", "id noticia"]) 
 
-            st.write(f"Tópicos para la fecha:")
+            st.write(f"Tópicos vigentes de la fecha seleccionada:")
 
             # Configurar opciones de la grilla
             gb = GridOptionsBuilder.from_dataframe(topics_df)
@@ -900,7 +976,27 @@ def control():
         st.stop()
 
     return
-#--------------------------------------------------
+#------------------------------------------------------------------------------------
+def dataset_validation(df: object) -> bool:
+
+    columnas_necesarias = [ 'asset_id',
+                            'title',
+                            'text',
+                            'start_time_local',
+                            'media'
+                            ]
+
+    # Obtener las columnas del DataFrame
+    columnas_archivo = df.columns.tolist()
+
+    # Verificar si todas las columnas necesarias están en el archivo
+    for columna in columnas_necesarias:
+        if columna not in columnas_archivo:
+            return False 
+    
+    return True
+
+#-----------------------------------------------------------------------------
 def format_date(date_str):
     date_obj = datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%f')
     formatted_date = date_obj.strftime('%Y-%m-%d %H:%M')
