@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from sklearn.metrics.pairwise import cosine_similarity
 from opensearch_data_model import TopicKeyword
+from opensearch_io import get_entities_news, get_title_news
 from collections import defaultdict 
 from collections import Counter
 
@@ -94,7 +95,7 @@ def clean_all(entities, accents=True, lower=True) -> list:
 
 
 #-----------------------------------------------------------------------
-def top_keywords(topic_id: int, topic_model: object, PATH) -> dict:
+def top_keywords(topic_id: int, topic_model: object, PATH: str ) -> dict:
     """
     Funcion que devuelve un diccionario de tuplas con el nombre del keyword y su peso,
     filtrado por un umbral de corte (media)
@@ -122,38 +123,32 @@ def top_keywords(topic_id: int, topic_model: object, PATH) -> dict:
         return {}
        
 #-------------------------------------------------------------------------
-def top_entities(topic_id: int, topic_model: object, topics: list, docs_embedding, data_news, entities: list, n_entities=10):
+def top_entities(topic_id: int, topic_model: object, data_news: object) -> dict:
     """
-    Las entidades mas representativas del topico se extraen de las entidades de las noticias mas similares al topico
-    filtradas por el umbral del tópico
-    topic_id        : id del topico
-    topic_model     : modelo de topicos
-    topics          : lista de los indices de posicion de los documentos del conjunto de documentos de entrenamiento
-    n_entities      : cant. de entidades extraidas por cada documento del topico
+    Las entidades mas representativas del topico se extraen de las entidades mas similares al topico
     """
-
     try:
-        # Obtener todos los documentos de un topico
-        topic_docs_idx = [i for i, (_, topic) in enumerate(zip(data_news, topics)) if topic == topic_id]
-        df_data = pd.DataFrame(np.array(topic_docs_idx).reshape(-1,1), columns=["idx"])
 
-        # Similitud coseno entre el topico y los documentos del topico
-        s_coseno = []
-        for i in topic_docs_idx:
-            s_coseno.append(cosine_similarity([topic_model.topic_embeddings_[topic_id + 1]], [docs_embedding[i]])[0][0])
+        docs_per_topics = [i for i, x in enumerate(topic_model.topics_) if x == topic_id]
+        score_docs = topic_model.probabilities_[docs_per_topics]
 
-        df_data['similitud'] = s_coseno
-        
-        # umbral
-        threshold = df_data['similitud'].mean()
+        doc_probs_x_topic = []
+        for i, doc in enumerate(docs_per_topics):
+            doc_probs_x_topic.append([data_news.iloc[doc].asset_id, round(score_docs[i],4)])
 
-        # Ordenado por mayor similitud
-        df_filtered = df_data[df_data["similitud"] > threshold].sort_values("similitud", ascending=False)
+        df_query = pd.DataFrame(doc_probs_x_topic, columns=['ID','score']).sort_values('score', ascending=False, ignore_index=True)
 
-        # Entidades de documentos ordenados para el topico elelgido (cantidad por documento=n_entities)
+        # Obtener un umbral de corte para los documentos del topico y filtrar
+        ## umbral
+        threshold = df_query.score.mean()
+
+        ## Nuevo df filtrado por el corte y ordenado por mayor similitud
+        df_filtered = df_query[df_query["score"] > threshold]
+
+        # Entidades de documentos ordenados para el topico elegido (cantidad por documento=n_entities)
         entities_topic = []
-        for doc in list(df_filtered["idx"]):
-            entities_topic.append(entities[doc][:n_entities])
+        for doc_ID in list(df_filtered["ID"]):
+            entities_topic.append(get_entities_news(doc_ID))
 
         # Crear un diccionario para contar en cuántos documentos aparece cada palabra
         document_frequencies = defaultdict(int)
@@ -163,7 +158,7 @@ def top_entities(topic_id: int, topic_model: object, topics: list, docs_embeddin
             unique_words = set(lista)
             for palabra in unique_words:
                 document_frequencies[palabra] += 1
-        
+
         # Ordenar las palabras por la frecuencia de documentos de mayor a menor
         sorted_frequencies = sorted(document_frequencies.items(), key=lambda item: item[1], reverse=True)
 
@@ -184,15 +179,13 @@ def top_entities(topic_id: int, topic_model: object, topics: list, docs_embeddin
 
             elif len(topic_entities_top) <= 3:
                 topic_entities_top[sorted_frequencies[idx][0]] = sorted_frequencies[idx][1]
-
+        
         return topic_entities_top
-    
-    except Exception as e:
-        print(f"Ha ocurrido un error: {e}")
-        return False   
+    except:
+        return {}
     
 #-------------------------------------------------------------------------
-def topic_documents(topic, topic_model, probs, df_news):
+def topic_documents(topic_id: int, topic_model: object, data_news: object) -> list:
     """
     función que devuelve los ids de los documentos top del tópico, 
     los titulos de los documentos top del tópico y
@@ -200,35 +193,31 @@ def topic_documents(topic, topic_model, probs, df_news):
     """
     try:
         # Cantidad de documentos por topico
-        docs_per_topics = [i for i, x in enumerate(topic_model.topics_) if x == topic]
+        docs_per_topics = [i for i, x in enumerate(topic_model.topics_) if x == topic_id]
+        score_docs = topic_model.probabilities_[docs_per_topics]
 
         # Obtener los IDs de los documentos y sus probabilidades 
-        docs_IDs = {}
         doc_probs_x_topic = []
-        for doc_idx in docs_per_topics:
-            
-            docs_IDs[df_news.indice[doc_idx]] = probs[doc_idx]
-            doc_probs_x_topic.append(probs[doc_idx])
+        for i, doc in enumerate(docs_per_topics):
+            doc_probs_x_topic.append([data_news.iloc[doc].asset_id, round(score_docs[i],4)])
+
+        df_query = pd.DataFrame(doc_probs_x_topic, columns=['ID', 'score']).sort_values('score', ascending=False, ignore_index=True)
         
-        # Calcular la media, el desvío estándar
-        threshold = np.mean(doc_probs_x_topic)
+        # Calcular la media
+        threshold = df_query.score.mean()
 
-        # Filtra los docs que superan o igualan al valor del umbral calculado
-        filter = {}
-        for k,v in docs_IDs.items():
-            if v >= threshold:
-                filter[k] = v
-        
-        # Ordeno de mayor a menor
-        ids_filter_sort = dict(sorted(filter.items(), key=lambda item: item[1], reverse=True))
+        ## Nuevo df filtrado por el corte y ordenado por mayor similitud
+        df_filtered = df_query[df_query["score"] > threshold]
 
-        title_filter_sort = [ df_news.loc[df_news['indice'] == idx].values[0][1] for idx in ids_filter_sort.keys() ]
+        docs_title_topic = []
+        for doc_ID in list(df_filtered["ID"]):
+            docs_title_topic.append(get_title_news(doc_ID))
 
-        return ids_filter_sort, title_filter_sort, threshold
+        return docs_title_topic, threshold
     except:
-        return {}, {}, 0.0
+        return [], 0.0
     
-#------------------------------------------------------
+#---------------------------------------------------------------------------
 def best_document(topic, topic_model, docs_embedding, id_data, title_data, data) -> str:
     """
     Función que devuelve el texto del documento mas cercano al topico elegido
@@ -245,30 +234,34 @@ def best_document(topic, topic_model, docs_embedding, id_data, title_data, data)
         return None, "None", "None"
     
 #---------------------------------------------------------------------------------------------------------
-def get_topic_name(texto, client, model="gpt-3.5-turbo", solo_titulos=False):
+def get_topic_name(texto: str, topic_id: int, topic_model: object, client, model="gpt-3.5-turbo", solo_titulos=False):
     """
-    Funcion que devuelve el nombre de un topico generado por LLM
+    Funcion que devuelve el nombre de un topico generado por LLM si encuentra modelo, sino labels del topico.
     """
-    load_dotenv()
-    model=os.environ.get('MODEL', model)
-    messages = [{"role": "system","content":
-                        """ Debes responder generando un topico del texto ingresado de tal forma que sea genérico y representativo,
-                            el topico debe estar rigurosamente expresado como maximo en 5 palabras, 
-                            el formato de salida debe ser la descipcion del topico."""},
-                {"role": "user", "content": texto}] 
-    
-    response = client.chat.completions.create(
-        messages=messages,
-        model=model,
-        frequency_penalty=0,
-        max_tokens=150,
-        n=1,
-        presence_penalty=0.6,
-        temperature=0.3,
-        top_p=1.0,
-        stop=None
-    )
-    message = response.choices[0].message.content
+    if client:
+        load_dotenv()
+        model=os.environ.get('MODEL', model)
+        messages = [{"role": "system","content":
+                            """ Debes responder generando un topico del texto ingresado de tal forma que sea genérico y representativo,
+                                el topico debe estar rigurosamente expresado como maximo en 5 palabras, 
+                                el formato de salida debe ser la descipcion del topico."""},
+                    {"role": "user", "content": texto}] 
+        
+        response = client.chat.completions.create(
+            messages=messages,
+            model=model,
+            frequency_penalty=0,
+            max_tokens=150,
+            n=1,
+            presence_penalty=0.6,
+            temperature=0.3,
+            top_p=1.0,
+            stop=None
+        )
+        message = response.choices[0].message.content
+    else:
+        topic_labels = topic_model.generate_topic_labels()
+        message = topic_labels[topic_id]
 
     return message
 

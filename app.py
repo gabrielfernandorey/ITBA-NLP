@@ -22,7 +22,7 @@ st.set_page_config(page_title = 'Topicos de Noticias', # Nombre de la pagina, sa
 with st.sidebar:
     selected = option_menu(
         menu_title="Topicos de noticias",
-        options=["Ingesta", "Base de Noticias", "Detección de Tópicos", "Topicos", "Gestión de Tópicos"],
+        options=["Ingesta", "Base de Noticias", "Ingresar texto", "Detección de Tópicos", "Topicos", "Gestión de Tópicos"],
     )
 
 sidebar()
@@ -55,6 +55,10 @@ if selected == "Base de Noticias":
     # Visualizar las noticias
     view_news()
 
+if selected == "Ingresar texto":
+
+    # Visualizar topico de una noticia
+    text_topic()
 
 if selected == "Detección de Tópicos":
 

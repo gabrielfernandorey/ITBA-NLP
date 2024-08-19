@@ -1,6 +1,7 @@
 import streamlit as st
 
 from components.faq import faq
+from components.disclaimer import disclaimer
 from dotenv import load_dotenv
 import os
 
@@ -12,7 +13,7 @@ def sidebar():
         st.markdown(
             "## Uso\n"
             "1. Ingresar [OpenAI API key](https://platform.openai.com/account/api-keys) abajo🔑\n"  # noqa: E501
-            "2. Subir archivos de noticias 📄\n"
+            "2. Ingestar archivos de noticias 📄\n"
             "3. Consultar tópicos encontrados\n"
         )
         api_key_input = st.text_input(
@@ -34,7 +35,9 @@ def sidebar():
             
         )
         
-        st.markdown("Desarrollado por Gabriel Rey")
+        st.markdown("Desarrollado por Gabriel Fernando Rey")
         st.markdown("---")
 
         faq()
+        st.markdown("---")
+        disclaimer()

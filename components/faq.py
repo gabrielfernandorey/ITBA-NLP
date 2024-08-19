@@ -16,3 +16,5 @@ reconocimiento de entidades nombradas y análisis de dependencias de manera ráp
     - OpenSearch: es un motor de búsqueda y análisis de código abierto desarrollado como un fork de Elasticsearch que permite la operación de embeddings. 
 """
     )
+
+    

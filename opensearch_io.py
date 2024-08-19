@@ -189,6 +189,63 @@ def get_news(date: str = None, process: bool = False) -> list:
 
     return db_news
 #----------------------------------------------------------------------------------
+def get_entities_news(doc_ID: str) -> list :
+    """
+    Funcion que devuelve una lista de entidades
+    de una noticia - (indice news de opensearch)
+    """
+    try:
+        index_name = 'news'
+
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {   "term": {
+                                "_id": doc_ID
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        response = os_client.search(index=index_name, body=query)
+        entities_doc = [ hit['_source']['entities'] for hit in response['hits']['hits']] 
+
+        return entities_doc[0]
+    except:
+        return []
+
+#----------------------------------------------------------------------------------
+def get_title_news(doc_ID: str) -> list :
+    """
+    Funcion que devuelve el titulo 
+    de una noticia - (indice news de opensearch)
+    """
+    try:
+        index_name = 'news'
+
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {   "term": {
+                                "_id": doc_ID
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        response = os_client.search(index=index_name, body=query)
+        entities_doc = [ hit['_source']['title'] for hit in response['hits']['hits']] 
+
+        return entities_doc[0]
+    except:
+        return []
+#----------------------------------------------------------------------------------
 def get_topics_opensearch(date_filter=None) -> dict:
     """
     Devuelve 1000 registros de topicos del indice topic 

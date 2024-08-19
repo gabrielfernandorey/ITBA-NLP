@@ -1,6 +1,8 @@
 .env
 __pycache__
 *.npy
-*.npy
-/ITBA-TP/data/modelos/bertopic_model_app
-/ITBA-TP/test/bigramas.txt
+/ITBA-TP/data/modelos/modelos_app/
+/ITBA-TP/data/modelos/modelos_notebook/
+/ITBA-TP/data/modelos/preproc_app/
+/ITBA-TP/data/modelos/preproc_notebook/
+/ITBA-TP/test/
