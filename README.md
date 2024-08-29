@@ -7,4 +7,6 @@
   2. Crear un ambiente virtual: virtualenv itba-nlp-env 
   3. Activar ambiente virtual: .\itba-nlp-env\Scripts\activate
   4. Cambiar a carpeta ITBA-NLP e instalar dependencias: pip install -r requirements.txt
+  5. Instalar Docker
+  6. 
 
