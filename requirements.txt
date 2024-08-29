@@ -121,8 +121,6 @@ spacy-legacy==3.0.12
 spacy-loggers==1.0.5
 srsly==2.4.8
 stack-data==0.6.3
-streamlit==1.35.0
-streamlit-option-menu==0.3.12
 sympy==1.12.1
 tbb==2021.12.0
 tenacity==8.3.0
