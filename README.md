@@ -19,4 +19,11 @@
      MODEL='gpt-4o-mini'
      BATCH_NEWS=1000
      ```
+  8. Procesos:
+     - Ejecutar la notebook NLP_01_data para generar los indices news y topic de la base, obtener keywords y entidades, y grabar noticias en news.
+     - Ejecutar NLP_02_model para modelar los topicos con el lote de noticias utilizado en NLP_01_data
+     - Ejecutar la notebook NLP_01_data nuevamente para grabar noticias en news de un nuevo lote de noticias.
+     - Ejecutar la notebook NLP_03_merged para fusionar los primeros dos modelos.
+     - El proceso continua procesando un nuevo lote en NLP_01_data y luego fusionar en NLP_03_merged
+     
 
