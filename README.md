@@ -2,7 +2,21 @@
 
 ### Trabajo Práctico NLP Detección de Tópicos y clasificación
 
-### Instalacion
-  1. Clonar el repositorio
-  2. Cear un ambiente virtual
-  3.  
+### Instrucciones
+  1. Abrir terminal y clonar el repositorio: ```git clone https://github.com/gabrielfernandorey/ITBA-NLP.git```
+  2. Crear un ambiente virtual: ```virtualenv itba-nlp-env```
+  3. Activar ambiente virtual: ```.\itba-nlp-env\Scripts\activate```
+  4. Cambiar a carpeta ITBA-NLP e instalar dependencias: ```pip install -r requirements.txt```
+  5. Instalar Docker
+  6. Instalacion de OpenSearch:
+     -  ```docker pull opensearchproject/opensearch:latest```
+     -  ```docker run -it -p 9200:9200 -p 9600:9600 -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=PassWord#1234! -e "discovery.type=single-node"  --name opensearch-node opensearchproject/opensearch:latest```
+  7. Crear y configurar archivo .env: El archivo debe estar en la carpeta ITBA-NLP y contener las siguientes lineas
+     ```
+     PATH_LOCAL='...path.../ITBA-NLP/data/'
+     # Si se dispone de API_KEY
+     OPENAI_API_KEY= 
+     MODEL='gpt-4o-mini'
+     BATCH_NEWS=1000
+     ```
+
