@@ -12,8 +12,8 @@
      -  ```docker pull opensearchproject/opensearch:latest```
      -  ```docker run -it -p 9200:9200 -p 9600:9600 -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=PassWord#1234! -e "discovery.type=single-node"  --name opensearch-node opensearchproject/opensearch:latest```
   7. Crear y configurar archivo .env: El archivo debe estar en la carpeta ITBA-NLP y contener las siguientes lineas
-     - PATH_LOCAL='...path.../ITBA-NLP/data/'
-     - OPENAI_API_KEY= 'api key si existe'
-     - MODEL='gpt-4o-mini'
-     - BATCH_NEWS=1000
+     ```PATH_LOCAL='...path.../ITBA-NLP/data/'
+     OPENAI_API_KEY= 'api key si existe'
+     MODEL='gpt-4o-mini'
+     BATCH_NEWS=1000```
 
