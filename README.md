@@ -14,7 +14,7 @@
   7. Crear y configurar archivo .env: El archivo debe estar en la carpeta ITBA-NLP y contener las siguientes lineas
      ```
      PATH_LOCAL='...path.../ITBA-NLP/data/'
-     
+     # Si se dispone de API_KEY
      OPENAI_API_KEY= 
      MODEL='gpt-4o-mini'
      BATCH_NEWS=1000
