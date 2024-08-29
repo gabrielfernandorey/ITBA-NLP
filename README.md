@@ -9,7 +9,7 @@
   4. Cambiar a carpeta ITBA-NLP e instalar dependencias: ```pip install -r requirements.txt```
   5. Instalar Docker
   6. Instalacion de OpenSearch:
-     -  docker pull opensearchproject/opensearch:latest
-     -  docker run -it -p 9200:9200 -p 9600:9600 -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=PassWord#1234! -e "discovery.type=single-node"  --name opensearch-node opensearchproject/opensearch:latest
+     -  ```docker pull opensearchproject/opensearch:latest```
+     -  ```docker run -it -p 9200:9200 -p 9600:9600 -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=PassWord#1234! -e "discovery.type=single-node"  --name opensearch-node opensearchproject/opensearch:latest```
      
 
