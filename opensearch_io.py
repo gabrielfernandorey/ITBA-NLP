@@ -1,8 +1,9 @@
 from dateutil.parser import parse
 from datetime import datetime
 import json
-
-import streamlit as st
+from collections import Counter
+import pandas as pd
+import numpy as np
 
 from opensearch_data_model import Topic, News, os_client, TOPIC_INDEX_NAME, NEWS_INDEX_NAME
 from opensearchpy import helpers
@@ -68,48 +69,51 @@ def save_news(data, df, entities, keywords) -> str:
 
     return response
 #----------------------------------------------------------------------------------
-def update_news(documents_ids: list, pos_id: list, docs_embedding, topics: list, probs: list) -> bool:
+def update_news(documents_ids: list, docs_embedding: list, topics: list, probs: list) -> bool:
     """
     Guardar el embedding, topico y probabilidad correspondiente en indice news
+    documents_ids: lista con los asset_id de cada noticia
+
     """
-
-    if len(documents_ids) != len(docs_embedding):
-        raise ValueError("El número de IDs de documentos y embeddings no coinciden.")
-        return False
-    
-    index_name = 'news'
-
-    # Construir el cuerpo de la solicitud para el API _bulk
-    acciones = []
-    for doc_id, pid, embedding, topic, prob in zip(documents_ids, pos_id, docs_embedding, topics, probs):
-    
-        update_body = { 
-                        "doc": {
-                            "pos_id": pid,
-                            "vector": embedding,
-                            "topic": topic,   
-                            "prob": prob,
-                            "process": True,
-                        }
-        }   
-        accion = {
-            "_op_type": "update",
-            "_index": index_name,
-            "_id": doc_id,
-            "doc": update_body["doc"]
-        }
-        
-        acciones.append(accion)
-
     try:
+        if len(documents_ids) != len(docs_embedding):
+            raise ValueError("El número de IDs de documentos y embeddings no coinciden.")
+            return False
+        
+        pid = int(get_pos_id()) + 1
+
+        index_name = 'news'
+
+        # Construir el cuerpo de la solicitud para el API _bulk
+        acciones = []
+        for doc_id, embedding, topic, prob in zip(documents_ids, docs_embedding, topics, probs):
+        
+            update_body = { 
+                            "doc": {
+                                "pos_id": pid,
+                                "vector": embedding,
+                                "topic": topic,   
+                                "prob": prob,
+                                "process": True,
+                            }
+            }   
+            accion = {
+                "_op_type": "update",
+                "_index": index_name,
+                "_id": doc_id,
+                "doc": update_body["doc"]
+            }
+            
+            acciones.append(accion)
+            pid +=1
+    
         # Realizar la actualización por lotes
         helpers.bulk(os_client, acciones)
+        return True
     
     except Exception as e:
         print(f"Ha ocurrido un error: {e}")
-        st.write("Error en el proceso.")
-
-    return True
+        return False
 #----------------------------------------------------------------------------------
 def get_news(date: str = None, process: bool = False) -> list:
     """
@@ -184,8 +188,9 @@ def get_news(date: str = None, process: bool = False) -> list:
             entities = ['']
         
         created_at = documents[idx]['created_at']
+        pos_id = documents[idx]['pos_id']
                    
-        db_news.append([_id, title, news, keywords, entities, created_at])
+        db_news.append([_id, title, news, keywords, entities, created_at, pos_id])
 
     return db_news
 #----------------------------------------------------------------------------------
@@ -243,12 +248,38 @@ def get_title_news(doc_ID: str) -> list :
         entities_doc = [ hit['_source']['title'] for hit in response['hits']['hits']] 
 
         return entities_doc[0]
-    except:
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
         return []
+#----------------------------------------------------------------------------------
+def get_pos_id():
+    """
+    Devuelve el ultimo valor de la posicion relativa de un registro en news
+    """
+    try:
+        index_name = 'news'
+        query = {
+            "size": 0, 
+            "aggs": {
+                "max_value": {
+                    "max": {
+                        "field": "pos_id"
+                    }
+                }
+            }
+        }
+        response = os_client.search(index=index_name, body=query)
+        max_pos_id = response['aggregations']['max_value']['value']
+        return max_pos_id
+    
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return 0
+
 #----------------------------------------------------------------------------------
 def get_topics_opensearch(date_filter=None) -> dict:
     """
-    Devuelve 1000 registros de topicos del indice topic 
+    Devuelve hasta 1000 registros de topicos del indice topic 
     """
     index_name='topic'
     try:
@@ -315,8 +346,9 @@ def select_data_from_news(topic: int) -> list:
     title = [hit['_source']['title'] for hit in all_hits]
     news  = [hit['_source']['news'] for hit in all_hits]
     probs = [hit['_source']['prob'] for hit in all_hits]
+    created = [hit['_source']['created_at'][:10] for hit in all_hits]
 
-    return ID, title, news, probs
+    return ID, title, news, probs, created
 
 #-----------------------------------------------------------------------------------
 def delete_index_opensearch(index_name: str) -> bool:
@@ -357,5 +389,100 @@ def get_topics_date() -> list:
     except Exception as e:
         print(f"Ha ocurrido un error: {e}")
         return [],[]
+#--------------------------------------------------------------------------------------
+def get_top_entities_os(topic_id) -> list:
+
+    index_name = 'news'
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"match_all": {}}
+                ],
+                "filter": [
+                    {"term": {"topic": topic_id}}
+                ]
+            }
+        }
+    }
+
+    # Inicializar la búsqueda con scroll
+    scroll = '2m'  # Mantener el contexto de scroll por 2 minutos
+    response = os_client.search(index=index_name, body=query, scroll=scroll, size=1000) # mantener en 1000 para baja latencia
+
+    # Obtener el ID de scroll
+    scroll_id = response['_scroll_id']
+    documents = [hit['_source'] for hit in response['hits']['hits']]
+    doc_ID = [hit['_id'] for hit in response['hits']['hits']]
+
+    # Seguir buscando hasta que no queden más resultados
+    while True:
+        response = os_client.scroll(scroll_id=scroll_id, scroll=scroll)
+        if len(response['hits']['hits']) == 0:
+            break
+        scroll_id = response['_scroll_id']
+        documents.extend([hit['_source'] for hit in response['hits']['hits']])
+        doc_ID.extend([hit['_id'] for hit in response['hits']['hits']])
+
+    db_news = []
+    for idx in range(len(documents)):
+
+        keywords =  documents[idx]['entities']
+                    
+        db_news.append(keywords)
+
+    # Umbral
+    keywords_list = sorted([item for sublist in db_news for item in sublist ])
+    cont_words = Counter(keywords_list)
+    return dict(sorted(cont_words.items(),key=lambda item:item[1], reverse=True)[:10])
+
+#-------------------------------------------------------------------------------------------------------
+def get_top_documents_threshold(topic_id):
+    
+    index_name = 'news'
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"match_all": {}}
+                ],
+                "filter": [
+                    {"term": {"topic": topic_id}}
+                ]
+            }
+        }
+    }
+
+    # Inicializar la búsqueda con scroll
+    scroll = '2m'  # Mantener el contexto de scroll por 2 minutos
+    response = os_client.search(index=index_name, body=query, scroll=scroll, size=1000) # mantener en 1000 para baja latencia
+
+    # Obtener el ID de scroll
+    scroll_id = response['_scroll_id']
+    documents = [hit['_source'] for hit in response['hits']['hits']]
+    doc_ID = [hit['_id'] for hit in response['hits']['hits']]
+
+    # Seguir buscando hasta que no queden más resultados
+    while True:
+        response = os_client.scroll(scroll_id=scroll_id, scroll=scroll)
+        if len(response['hits']['hits']) == 0:
+            break
+        scroll_id = response['_scroll_id']
+        documents.extend([hit['_source'] for hit in response['hits']['hits']])
+        doc_ID.extend([hit['_id'] for hit in response['hits']['hits']])
+
+    db_news = []
+    for idx in range(len(documents)):
+
+        title =  documents[idx]['title']
+        probs =  documents[idx]['prob']
+                    
+        db_news.append([title, probs])
+
+    threshold = np.array(probs).mean()
+    df = pd.DataFrame(db_news).sort_values(1, ascending=False)
+    df_filtrado = df[df[1] >= threshold]
+
+    return df_filtrado[0].to_list() , threshold
 
     

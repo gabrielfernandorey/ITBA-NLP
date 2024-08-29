@@ -1,9 +1,13 @@
+####################
+# NLP_tools
+####################
 import re, os
 import unicodedata
 from functools import wraps
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
+from datetime import datetime, date, timedelta
 
 from sklearn.metrics.pairwise import cosine_similarity
 from opensearch_data_model import TopicKeyword
@@ -11,7 +15,7 @@ from opensearch_io import get_entities_news, get_title_news
 from collections import defaultdict 
 from collections import Counter
 
-#-------------------
+#-------------------------------------------------------------------------------------------------------------
 class Cleaning_text:
     '''
     Limpiar elementos no deseados del texto 
@@ -207,7 +211,7 @@ def topic_documents(topic_id: int, topic_model: object, data_news: object) -> li
         threshold = df_query.score.mean()
 
         ## Nuevo df filtrado por el corte y ordenado por mayor similitud
-        df_filtered = df_query[df_query["score"] > threshold]
+        df_filtered = df_query[df_query["score"] >= threshold]
 
         docs_title_topic = []
         for doc_ID in list(df_filtered["ID"]):
@@ -234,11 +238,12 @@ def best_document(topic, topic_model, docs_embedding, id_data, title_data, data)
         return None, "None", "None"
     
 #---------------------------------------------------------------------------------------------------------
-def get_topic_name(texto: str, topic_id: int, topic_model: object, client, model="gpt-3.5-turbo", solo_titulos=False):
+def get_topic_name(texto: str, topic_id: int, topic_model: object, client, model="gpt-3.5-turbo"):
     """
     Funcion que devuelve el nombre de un topico generado por LLM si encuentra modelo, sino labels del topico.
     """
-    if client:
+    if texto is not None and client:
+    
         load_dotenv()
         model=os.environ.get('MODEL', model)
         messages = [{"role": "system","content":
@@ -368,12 +373,69 @@ def keywords_with_neighboards(keywords_spa, POS_1='NOUN', POS_2='ADJ'):
         doc_kwn.append(sorted_keywords_neighbor)
 
     return doc_kwn, commons
+#-------------------------------------------------------------------------------------------------------------------------------------------
+def merged_results(topic_model_1, merged_model):
 
+    topic_freq_1 = topic_model_1.get_topic_freq()
+    topic_freq_m = merged_model.get_topic_freq()
 
+    df1 = topic_freq_1.sort_values(by='Topic').reset_index(drop=True)
+    dfm = topic_freq_m.sort_values(by='Topic').reset_index(drop=True)
 
+    # Renombrar las columnas 'Count' para diferenciar DataFrames
+    df1 = df1.rename(columns={'Count': 'Count1'})
+    dfm = dfm.rename(columns={'Count': 'Merged'})
 
+    df_combined = pd.merge(df1, dfm, on='Topic', how='outer')
 
-        
+    # Calcular la nueva columna 'Count2' como la resta de 'Merged' y 'Count1'
+    # Asegurarse de manejar NaN correctamente
+    df_combined['Count2'] = df_combined['Merged'].fillna(0) - df_combined['Count1'].fillna(0)
+
+    # Reordenar las columnas en el orden deseado
+    df_combined = df_combined[['Topic', 'Count1', 'Count2', 'Merged']]
+
+    return df_combined
+#-------------------------------------------------------------------------------------------------------------------------------------------
+def update_topics_date(from_date, to_date, df_combined, date_choice):
+
+    fecha_datetime = datetime.strptime(date_choice, '%Y-%m-%d')
+    fecha_formateada = fecha_datetime.strftime('%Y-%m-%dT%H:%M:%S')
+
+    fecha_datetime_t1 = fecha_datetime + timedelta(days=1)
+    fecha_formateada_t1 = fecha_datetime_t1.strftime('%Y-%m-%dT%H:%M:%S')
+    
+    # completamos con las fechas de los nuevos topicos
+    while len(from_date) < len(df_combined):    
+        from_date.append(fecha_formateada)
+        to_date.append(fecha_formateada_t1)
+
+    # modifcamos la fecha del topico que contenga nuevos documentos
+    for index, row in df_combined.iterrows(): 
+        if row['Count2'] != 0:
+            to_date[int(row['Topic'])] = fecha_formateada_t1
+
+    return from_date, to_date
+
+#-------------------------------------------------------------------------------------------------------------------------------------------
+def calculate_probabilities(model, docs):
+    """
+    revisar esto
+    """
+    # Transformar documentos al espacio vectorial
+    embeddings = model.embedding_model.embed(docs)
+
+    # Aplicar reducción de dimensionalidad
+    reduced_embeddings = model.umap_model.transform(embeddings)
+    
+    # Inferir clústeres y calcular distancias
+    clusters = model.hdbscan_model.predict(reduced_embeddings)
+    distances = model.hdbscan_model.transform(reduced_embeddings)
+    
+    # Aproximar probabilidades (probabilidad inversamente proporcional a la distancia)
+    max_distances = np.max(distances, axis=1, keepdims=True)
+    probs = 1 - (distances / max_distances)
+    return clusters, probs
 
 
 

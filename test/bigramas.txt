@@ -1,7 +1,0 @@
-# Opción 2: Ingresar texto manualmente
-    # Crear un cuadro de entrada de texto
-    input_text = st.text_area("Opción 3. Ingrese una noticia para estimar un tópico", height=200)
-    if input_text:
-        if st.button("Estimar tópico"):
-            process_text(PATH, input_text)  # Estimar tópico de noticia ingresada como texto
-        return
