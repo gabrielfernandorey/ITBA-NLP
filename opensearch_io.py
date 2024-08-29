@@ -485,4 +485,30 @@ def get_top_documents_threshold(topic_id):
 
     return df_filtrado[0].to_list() , threshold
 
+#-------------------------------------------------------------------------------------------------------
+def get_one_topic(topic_id):
+
+    try:
+        index_name='topic'
+        query = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"index": topic_id}}
+                        ]
+                    }
+                }
+            }
+        response = os_client.search(index=index_name, body=query)
+
+        name        = [ hit['_source']['name'] for hit in response['hits']['hits']][0] 
+        threshold   = [ hit['_source']['similarity_threshold'] for hit in response['hits']['hits']][0] 
+        return name, threshold
+
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return []
+        
+
+
     
