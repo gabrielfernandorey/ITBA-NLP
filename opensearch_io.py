@@ -508,7 +508,30 @@ def get_one_topic(topic_id):
     except Exception as e:
         print(f"Ha ocurrido un error: {e}")
         return []
-        
+
+#-------------------------------------------------------------------------------------------------------
+def get_topic_keywords_entities(topic_id):
+
+    try:
+        index_name='topic'
+        query = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"index": topic_id}}
+                        ]
+                    }
+                }
+            }
+        response = os_client.search(index=index_name, body=query)
+
+        keywords       = [ hit['_source']['keywords'] for hit in response['hits']['hits']][0] 
+        entities       = [ hit['_source']['entities'] for hit in response['hits']['hits']][0] 
+        return keywords, entities
+
+    except Exception as e:
+        print(f"Ha ocurrido un error: {e}")
+        return [],[]
 
 
     
