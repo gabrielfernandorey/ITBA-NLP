@@ -1,0 +1,1 @@
+En esta carpeta se guardan los archivos de entidades, keywords y vocabulario para cada lote de noticias procesado por fecha 

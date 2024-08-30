@@ -1,0 +1,1 @@
+En esta carpeta se guardan los modelos y los archivos de embeddings.
